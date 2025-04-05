@@ -275,7 +275,9 @@ async def recommend_claim_options_openai(policies: List[Dict], situation: str) -
         return {"recommendations": [], "message": "Unable to provide recommendations due to configuration issues."}
 
     try:
-        policies_json = json.dumps(policies, indent=2)
+        openai_client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
+        safe_policies = convert_mongo_types(policies)
+        policies_json = json.dumps(safe_policies, indent=2)
         
         prompt = f"""
         Here are the user's insurance policies:
@@ -301,7 +303,7 @@ async def recommend_claim_options_openai(policies: List[Dict], situation: str) -
         Output must be valid JSON.
         """
         
-        response = await openai.ChatCompletion.acreate(
+        response = await openai_client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are a helpful insurance claims assistant providing accurate recommendations based only on the provided policy details."},
