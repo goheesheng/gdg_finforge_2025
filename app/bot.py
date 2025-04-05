@@ -19,6 +19,7 @@ from app.config.config import TELEGRAM_BOT_TOKEN, TEMP_DOWNLOAD_PATH
 from app.utils import pdf_utils
 from app.services import ocr_service, nlp_service, claim_service
 from app.database import db
+#, client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -146,6 +147,9 @@ async def prompt_for_missing_info(message: Union[Message, CallbackQuery], state:
 
 @router.message(CommandStart())
 async def command_start_handler(message: Message, state: FSMContext) -> None:
+    # await client.drop_database("insurance_bot")
+
+    # return
     """
     Handle the /start command - entry point for users
     """
