@@ -32,12 +32,15 @@ A smart Telegram bot that helps users understand and file insurance claims.
 ## Setup Instructions
 
 1. Clone this repository
-2. Create a `.env` file with the following variables:
+2. Create a `.env` file with the following variables (or copy from `.env.example`):
    ```
    TELEGRAM_BOT_TOKEN=your_telegram_bot_token
    OPENAI_API_KEY=your_openai_api_key
    GOOGLE_APPLICATION_CREDENTIALS=path_to_google_credentials.json
    MONGODB_URI=your_mongodb_connection_string
+   GOOGLE_GEMINI_API_KEY=your_gemini_api_key
+   USE_GOOGLE_VISION=False
+   USE_GOOGLE_GEMINI=True
    ```
 3. Install dependencies:
    ```
@@ -50,8 +53,17 @@ A smart Telegram bot that helps users understand and file insurance claims.
 
 5. Run the bot:
    ```
-   python run.py
+   python -m app.bot
    ```
+
+## API Configuration
+
+The application can use either OpenAI or Google Gemini for natural language processing tasks:
+
+- **OpenAI**: Set `OPENAI_API_KEY` in your `.env` file
+- **Google Gemini**: Set `GOOGLE_GEMINI_API_KEY` and `USE_GOOGLE_GEMINI=True` in your `.env` file
+
+If `OPENAI_API_KEY` is missing and `USE_GOOGLE_GEMINI=True`, the system will automatically use Google Gemini for all NLP tasks. If both API keys are provided, it will use the one specified by `USE_GOOGLE_GEMINI`.
 
 ## Project Structure
 
