@@ -65,6 +65,20 @@ The application can use either OpenAI or Google Gemini for natural language proc
 
 If `OPENAI_API_KEY` is missing and `USE_GOOGLE_GEMINI=True`, the system will automatically use Google Gemini for all NLP tasks. If both API keys are provided, it will use the one specified by `USE_GOOGLE_GEMINI`.
 
+### Google Cloud Authentication
+
+The `GOOGLE_APPLICATION_CREDENTIALS` environment variable points to a service account key file (`insurance-bot-key.json`) that grants access to Google Cloud services:
+
+- When `USE_GOOGLE_VISION=True`, this key authenticates requests to Google Vision API for OCR processing of uploaded documents
+- The service account must have the appropriate IAM permissions for Vision API
+
+To obtain your own service account key:
+1. Create a project in [Google Cloud Console](https://console.cloud.google.com/)
+2. Enable the Vision API and Gemini API for your project
+3. Create a service account with appropriate permissions
+4. Download the JSON key file and place it in your project directory
+5. Update the `.env` file to point to this key file
+
 ## Project Structure
 
 - `
