@@ -5,3 +5,4 @@
 ### For windows run
 ` pip install -r windows_requirements.txt`
 
+### Do remember to update your .env file with the API keys
