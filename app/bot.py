@@ -12,6 +12,7 @@ from aiogram.utils.markdown import hbold
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.client.default import DefaultBotProperties
 
 from app.config.config import TELEGRAM_BOT_TOKEN, TEMP_DOWNLOAD_PATH
 from app.utils import pdf_utils
@@ -23,7 +24,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Initialize bot and dispatcher
-bot = Bot(token=TELEGRAM_BOT_TOKEN, parse_mode=ParseMode.HTML)
+bot = Bot(token=TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 router = Router()
@@ -319,7 +320,7 @@ async def handle_policy_upload(message: Message, state: FSMContext) -> None:
             mime_type = message.document.mime_type
             if mime_type not in ["application/pdf", "image/jpeg", "image/png"]:
                 await message.answer(
-                    "Sorry, I can only process PDF files or images. Please upload a supported file type.",
+                    "Sorry, I can only process PDF files or images (JPEG, PNG). Please upload a supported file type.",
                     reply_markup=await get_main_menu_keyboard()
                 )
                 await bot.delete_message(chat_id=message.chat.id, message_id=processing_message.message_id)
@@ -344,9 +345,14 @@ async def handle_policy_upload(message: Message, state: FSMContext) -> None:
         # Extract text from the file
         extracted_text = await ocr_service.extract_text_from_file(file_path)
         
-        if not extracted_text:
+        # Check if we got any meaningful text back
+        if not extracted_text or len(extracted_text.strip()) < 50:  # Arbitrary minimum length for meaningful text
             await message.answer(
-                "I couldn't extract any text from the uploaded document. Please try a clearer image or a properly formatted PDF.",
+                "I couldn't extract enough readable text from your document. This could be because:\n\n"
+                "• The image quality is too low\n"
+                "• The document is scanned at an angle\n"
+                "• The text is too small or blurry\n\n"
+                "Please try uploading a clearer image or a properly formatted PDF document.",
                 reply_markup=await get_main_menu_keyboard()
             )
             await state.set_state(UserStates.main_menu)
@@ -356,12 +362,29 @@ async def handle_policy_upload(message: Message, state: FSMContext) -> None:
         # Use NLP to extract structured policy details
         policy_details = await nlp_service.extract_policy_details(extracted_text)
         
-        if not policy_details:
-            await message.answer(
-                "I couldn't understand the insurance policy details from the document. "
-                "Please upload a clearer document, or one with more standard formatting.",
-                reply_markup=await get_main_menu_keyboard()
-            )
+        # Check if we have meaningful policy details
+        is_valid_policy = False
+        # Check for minimum required fields to consider it a valid policy
+        if policy_details and isinstance(policy_details, dict):
+            required_fields = ["provider", "policy_number", "coverage_period", "coverage_areas"]
+            if any(field in policy_details for field in required_fields):
+                is_valid_policy = True
+        
+        if not is_valid_policy:
+            # More specific error message based on what we could extract
+            error_message = "I couldn't understand the insurance policy details from the document. "
+            
+            if len(extracted_text) > 500:  # We got text, but couldn't parse it as a policy
+                error_message += "The document appears to contain text, but it doesn't seem to be a standard insurance policy format. "
+                error_message += "Please upload a document that clearly shows:\n\n"
+                error_message += "• Insurance provider name\n"
+                error_message += "• Policy number\n" 
+                error_message += "• Coverage details and limits\n\n"
+                error_message += "Alternatively, you can take a clearer photo focusing on the policy summary page."
+            else:
+                error_message += "Please upload a clearer document, or one with more standard formatting."
+            
+            await message.answer(error_message, reply_markup=await get_main_menu_keyboard())
             await state.set_state(UserStates.main_menu)
             await bot.delete_message(chat_id=message.chat.id, message_id=processing_message.message_id)
             return
@@ -403,7 +426,9 @@ async def handle_policy_upload(message: Message, state: FSMContext) -> None:
             summary += "\n✅ Key Coverage Areas:\n"
             for area, details in policy_details["coverage_areas"].items():
                 limit = details.get("limit", "Not specified")
-                summary += f"- {area}: {limit}\n"
+                copay = details.get("copay", "")
+                copay_info = f" (Co-pay: {copay})" if copay else ""
+                summary += f"- {area}: {limit}{copay_info}\n"
         
         if "exclusions" in policy_details and policy_details["exclusions"]:
             summary += "\n❌ Key Exclusions:\n"
@@ -429,7 +454,7 @@ async def handle_policy_upload(message: Message, state: FSMContext) -> None:
     except Exception as e:
         logger.error(f"Error processing policy upload: {e}")
         await message.answer(
-            "Sorry, I encountered an error while processing your document. Please try again later.",
+            "Sorry, I encountered an error while processing your document. Please try again with a clearer image or properly formatted PDF.",
             reply_markup=await get_main_menu_keyboard()
         )
         await state.set_state(UserStates.main_menu)

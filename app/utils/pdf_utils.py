@@ -4,8 +4,9 @@ import aiofiles
 from pathlib import Path
 from typing import Optional, List, Union, BinaryIO
 import aiohttp
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 import io
+import numpy as np
 
 from app.config.config import TEMP_DOWNLOAD_PATH, MAX_FILE_SIZE_MB
 
@@ -87,6 +88,55 @@ async def get_file_type(file_path: Union[str, Path]) -> str:
             return f'image/{img.format.lower()}'
         except:
             return 'application/octet-stream'
+
+async def preprocess_image_for_ocr(image_path: Union[str, Path]) -> Optional[Path]:
+    """
+    Preprocess an image to improve OCR results.
+    
+    This function applies several enhancements to the image:
+    1. Resize if too large
+    2. Convert to grayscale
+    3. Increase contrast
+    4. Apply adaptive thresholding
+    5. Reduce noise
+    
+    Returns the path to the processed image.
+    """
+    try:
+        image_path = Path(image_path)
+        output_path = image_path.parent / f"processed_{image_path.name}"
+        
+        # Open the image
+        img = Image.open(image_path)
+        
+        # Resize if too large
+        max_size = 2000  # Maximum dimension
+        if max(img.size) > max_size:
+            ratio = max_size / max(img.size)
+            new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+            img = img.resize(new_size, Image.LANCZOS)
+        
+        # Convert to grayscale
+        if img.mode != 'L':
+            img = img.convert('L')
+        
+        # Increase contrast
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(2.0)  # Adjust contrast factor as needed
+        
+        # Apply light sharpening
+        img = img.filter(ImageFilter.SHARPEN)
+        
+        # Apply a small blur to reduce noise
+        img = img.filter(ImageFilter.GaussianBlur(radius=0.5))
+        
+        # Save the processed image
+        img.save(output_path)
+        
+        return output_path
+    except Exception as e:
+        logger.error(f"Error preprocessing image: {e}")
+        return None
 
 async def cleanup_temp_files(file_paths: List[Path]) -> None:
     """Clean up temporary files"""

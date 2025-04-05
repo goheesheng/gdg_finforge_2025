@@ -50,13 +50,9 @@ A smart Telegram bot that helps users understand and file insurance claims.
 
 5. Run the bot:
    ```
-   python app/bot.py
+   python run.py
    ```
 
 ## Project Structure
 
-- `app/bot.py` - Main bot entry point
-- `app/services/` - Core service modules (OCR, NLP, claims)
-- `app/database/` - Database connection and models
-- `app/utils/` - Utility functions
-- `app/config/` - Configuration settings
+- `

@@ -4,9 +4,10 @@ import pytesseract
 from PIL import Image
 import pdfplumber
 import aiofiles
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Dict
 from pathlib import Path
 import logging
+import re
 
 from app.config.config import TESSERACT_CMD, USE_GOOGLE_VISION, GOOGLE_APPLICATION_CREDENTIALS
 
@@ -30,21 +31,100 @@ if USE_GOOGLE_VISION:
         USE_GOOGLE_VISION = False
 
 async def extract_text_from_pdf(file_path: Union[str, Path]) -> str:
-    """Extract text from a PDF file using pdfplumber"""
+    """Extract text from a PDF file using pdfplumber with enhanced handling for tables and structure"""
     text = ""
+    tables_data = []
+    
     try:
         with pdfplumber.open(file_path) as pdf:
-            for page in pdf.pages:
+            for page_num, page in enumerate(pdf.pages):
+                # Extract tables first to prevent duplicating content
+                tables = page.extract_tables()
+                if tables:
+                    for table in tables:
+                        if table:
+                            table_text = "\n".join([
+                                " | ".join([str(cell) if cell else "" for cell in row])
+                                for row in table
+                            ])
+                            tables_data.append(f"Table (Page {page_num + 1}):\n{table_text}\n")
+                
+                # Extract regular text
                 page_text = page.extract_text() or ""
                 text += page_text + "\n"
+                
+                # Try to extract form fields (useful for PDF forms)
+                try:
+                    if hasattr(page, 'annots') and page.annots:
+                        for annot in page.annots:
+                            if annot.get('subtype') == 'Widget':
+                                field_value = annot.get('value', '')
+                                field_name = annot.get('field_name', '')
+                                if field_name and field_value:
+                                    text += f"{field_name}: {field_value}\n"
+                except Exception as e:
+                    logger.warning(f"Error extracting form fields: {e}")
+    
+        # Append tables data to the end
+        if tables_data:
+            text += "\n\nEXTRACTED TABLES:\n" + "\n".join(tables_data)
+            
+        # Post-process to fix common OCR issues with insurance policies
+        text = post_process_insurance_policy(text)
+            
     except Exception as e:
         logger.error(f"Error extracting text from PDF: {e}")
+    
+    return text
+
+def post_process_insurance_policy(text: str) -> str:
+    """Post-process extracted text to improve readability for insurance documents"""
+    # Fix common OCR issues
+    text = re.sub(r'(\d),(\d)', r'\1\2', text)  # Fix numbers with commas
+    
+    # Identify policy numbers using patterns
+    policy_pattern = re.compile(r'([Pp]olicy\s*(?:#|[Nn]o|[Nn]umber)[:.]?\s*)([A-Z0-9-]{5,20})')
+    text = policy_pattern.sub(r'Policy Number: \2', text)
+    
+    # Identify coverage amounts
+    coverage_pattern = re.compile(r'(\$\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})?)')
+    text = coverage_pattern.sub(r'\1', text)
+    
+    # Identify dates in various formats
+    date_pattern = re.compile(r'(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})')
+    text = date_pattern.sub(r'\1', text)
+    
+    # Make sure key policy sections are on new lines
+    section_headers = [
+        "Coverage Summary", "Policy Details", "Premium", "Exclusions", 
+        "Limitations", "Benefits", "Deductible", "Co-payment", "Co-pay"
+    ]
+    for header in section_headers:
+        text = re.sub(f'([^\n])({header})', r'\1\n\2', text, flags=re.IGNORECASE)
+    
     return text
 
 async def extract_text_from_image_tesseract(file_path: Union[str, Path]) -> str:
     """Extract text from an image using Tesseract OCR"""
     try:
-        return pytesseract.image_to_string(Image.open(file_path))
+        from app.utils import pdf_utils
+        
+        # Preprocess the image to improve OCR results
+        processed_path = await pdf_utils.preprocess_image_for_ocr(file_path)
+        if processed_path:
+            # Use improved image for OCR
+            result = pytesseract.image_to_string(Image.open(processed_path))
+            
+            # Clean up the processed image
+            try:
+                processed_path.unlink()
+            except:
+                pass
+                
+            return result
+        else:
+            # Fall back to original image if preprocessing fails
+            return pytesseract.image_to_string(Image.open(file_path))
     except Exception as e:
         logger.error(f"Error with Tesseract OCR: {e}")
         return ""
@@ -55,12 +135,32 @@ async def extract_text_from_image_google_vision(file_path: Union[str, Path]) -> 
         return await extract_text_from_image_tesseract(file_path)
     
     try:
-        async with aiofiles.open(file_path, 'rb') as image_file:
+        from app.utils import pdf_utils
+        
+        # Preprocess the image to improve OCR results
+        processed_path = await pdf_utils.preprocess_image_for_ocr(file_path)
+        use_path = processed_path if processed_path else file_path
+        
+        async with aiofiles.open(use_path, 'rb') as image_file:
             content = await image_file.read()
         
         image = vision.Image(content=content)
-        response = vision_client.text_detection(image=image)
+        
+        # Use text detection with language hints to improve accuracy
+        # This is especially useful for documents with specialized terminology
+        image_context = vision.ImageContext(
+            language_hints=["en"]  # Adding more languages if needed: ["en", "fr", "es"]
+        )
+        
+        response = vision_client.text_detection(image=image, image_context=image_context)
         texts = response.text_annotations
+        
+        # Clean up the processed image if it exists
+        if processed_path:
+            try:
+                processed_path.unlink()
+            except:
+                pass
         
         if texts:
             return texts[0].description
