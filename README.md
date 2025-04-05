@@ -29,10 +29,6 @@ A smart Telegram bot that helps users understand and file insurance claims.
    - Auto-generate filled claim forms
    - Download or receive via email
 
-물론이죠! 아래는 당신이 원하는 대로 Google Cloud Vision 설정 안내를 **4번과 6번 사이**에 맞게 자연스럽게 삽입한 **수정된 `Setup Instructions`**입니다:
-
----
-
 ## Setup Instructions
 
 1. Clone this repository  
@@ -50,6 +46,7 @@ A smart Telegram bot that helps users understand and file insurance claims.
    ```bash
    pip install -r requirements.txt
    ```
+
 4. Install Tesseract OCR:
    - For macOS: `brew install tesseract`
    - For Ubuntu: `sudo apt install tesseract-ocr`
@@ -66,18 +63,101 @@ A smart Telegram bot that helps users understand and file insurance claims.
      ```env
      GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/your/insurance-bot-key.json
      ```
-   - (Optional) You can also set it in your code using:
+   - (Optional) Set it in code using:
      ```python
      import os
      os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/absolute/path/to/key.json"
      ```
-   - Make sure to **exclude the `.json` file from version control**:
-     Add this to `.gitignore`:
+   - Make sure to **exclude the `.json` file** in `.gitignore`:
      ```txt
      *.json
      ```
 
-6. Run the bot:
+6. Set up MongoDB  
+You have two main options:
+
+---
+
+### ✅ Option 1: MongoDB Atlas (Cloud, Recommended)
+
+1. Sign up at [https://www.mongodb.com/cloud/atlas](https://www.mongodb.com/cloud/atlas)  
+2. Create a **Free Tier Cluster** (e.g., M0 Sandbox)  
+3. Go to **Database Access** → Add a user (e.g., `admin`, choose a strong password)  
+4. Under **Network Access**, allow access from `0.0.0.0/0` (or your own IP for better security)  
+5. Copy your connection URI:  
+   `mongodb+srv://admin:yourpassword@cluster0.mongodb.net/?retryWrites=true&w=majority`  
+6. Add it to your `.env` file like so:
+   ```env
+   MONGODB_URI=mongodb+srv://admin:yourpassword@cluster0.mongodb.net/?retryWrites=true&w=majority
+   ```
+
+---
+
+### ✅ Option 2: Install MongoDB Locally
+
+#### 🧑‍💻 macOS
+```bash
+brew tap mongodb/brew
+brew install mongodb-community@7.0
+brew services start mongodb-community@7.0
+```
+
+#### 🧑‍💻 Ubuntu
+```bash
+sudo apt update
+sudo apt install -y mongodb
+sudo systemctl start mongodb
+sudo systemctl enable mongodb
+```
+
+#### 🧑‍💻 Windows
+1. Download from [official MongoDB website](https://www.mongodb.com/try/download/community)  
+2. Follow the installation wizard  
+3. (Optional) Install **MongoDB Compass** GUI
+
+---
+
+### ✅ Test MongoDB connection in Python
+
+1. Install `pymongo`:
+   ```bash
+   pip install pymongo
+   ```
+
+2. Sample test script:
+   ```python
+   from pymongo import MongoClient
+   import os
+   from dotenv import load_dotenv
+
+   load_dotenv()
+   uri = os.getenv("MONGODB_URI")
+
+   client = MongoClient(uri)
+   db = client['insurance_bot']
+   collection = db['policies']
+
+   collection.insert_one({"user_id": 12345, "policy_name": "Health Insurance"})
+
+   for doc in collection.find():
+       print(doc)
+   ```
+
+---
+
+### 🔐 Security Notes
+
+- Never commit your `.env` or credentials files
+- Add to `.gitignore`:
+  ```txt
+  .env
+  *.json
+  ```
+- For production Atlas setups, use specific IP whitelisting and role-based access control
+
+---
+
+7. Run the bot:
    ```bash
    python -m app.bot
    ```
