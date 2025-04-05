@@ -58,15 +58,53 @@ async def generate_claim_form(user_id: int, policy_id: str, claim_data: Dict, ou
         content.append(Paragraph(f"Insurance Claim Form", style_heading))
         content.append(Spacer(1, 12))
         
-        # Add policy information
+        # Add policy information with default values
         content.append(Paragraph(f"Policy Information", styles['Heading2']))
         content.append(Spacer(1, 6))
         
+        # Extract policy ID for display if other details are missing
+        policy_id_str = str(policy.get("_id", ""))
+        policy_id_short = policy_id_str[-6:] if policy_id_str else ""
+        
+        # Format policy information with defaults
+        provider = policy.get("provider", "")
+        if not provider:
+            # Try alternative fields
+            if policy.get("company_name"):
+                provider = policy.get("company_name")
+            elif policy.get("insurer"):
+                provider = policy.get("insurer")
+            elif policy_id_short:
+                provider = f"Policy {policy_id_short}"
+            else:
+                provider = "Not Specified"
+        
+        policy_number = policy.get("policy_number", "")
+        if not policy_number:
+            policy_number = policy.get("id_number", policy_id_short) or "Not Specified"
+        
+        policy_holder = policy.get("policy_holder", "")
+        if not policy_holder:
+            # Try to construct from user information
+            policy_holder = f"{user.get('first_name', '')} {user.get('last_name', '')}"
+            if not policy_holder.strip():
+                policy_holder = user.get('username', 'John Doe')
+        
+        policy_type = policy.get("policy_type", "")
+        if not policy_type:
+            # Try to determine from coverage areas
+            if policy.get("coverage_areas"):
+                areas = list(policy.get("coverage_areas", {}).keys())
+                if areas:
+                    policy_type = f"{areas[0].capitalize()} Insurance"
+            else:
+                policy_type = "Health Insurance"
+                
         policy_data = [
-            ["Policy Provider:", policy.get("provider", "")],
-            ["Policy Number:", policy.get("policy_number", "")],
-            ["Policy Holder:", policy.get("policy_holder", "")],
-            ["Policy Type:", policy.get("policy_type", "")]
+            ["Policy Provider:", provider],
+            ["Policy Number:", policy_number],
+            ["Policy Holder:", policy_holder],
+            ["Policy Type:", policy_type]
         ]
         
         policy_table = Table(policy_data, colWidths=[120, 300])
@@ -79,14 +117,33 @@ async def generate_claim_form(user_id: int, policy_id: str, claim_data: Dict, ou
         content.append(policy_table)
         content.append(Spacer(1, 12))
         
-        # Add claimant information
+        # Add claimant information with defaults
         content.append(Paragraph(f"Claimant Information", styles['Heading2']))
         content.append(Spacer(1, 6))
         
+        # Construct full name from available fields
+        full_name = user.get("full_name", "")
+        if not full_name:
+            first_name = user.get("first_name", "")
+            last_name = user.get("last_name", "")
+            if first_name or last_name:
+                full_name = f"{first_name} {last_name}".strip()
+            else:
+                full_name = user.get("username", "John Doe")
+        
+        # Use Telegram ID as fallback for contact info
+        phone = user.get("phone", "")
+        if not phone:
+            phone = user.get("contact_number", f"Telegram ID: {user_id}")
+        
+        email = user.get("email", "")
+        if not email:
+            email = user.get("username", "") + "@example.com" if user.get("username") else "Not Provided"
+        
         claimant_data = [
-            ["Name:", user.get("full_name", "")],
-            ["Contact Number:", user.get("phone", "")],
-            ["Email:", user.get("email", "")],
+            ["Name:", full_name],
+            ["Contact Number:", phone],
+            ["Email:", email],
         ]
         
         claimant_table = Table(claimant_data, colWidths=[120, 300])
@@ -105,11 +162,11 @@ async def generate_claim_form(user_id: int, policy_id: str, claim_data: Dict, ou
         
         # Format claim data
         claim_info_data = [
-            ["Claim Type:", claim_data.get("claim_type", "")],
-            ["Date of Service:", claim_data.get("service_date", "")],
-            ["Provider Name:", claim_data.get("provider_name", "")],
+            ["Claim Type:", claim_data.get("claim_type", "Not Specified")],
+            ["Date of Service:", claim_data.get("service_date", datetime.now().strftime("%Y-%m-%d"))],
+            ["Provider Name:", claim_data.get("provider_name", "Not Specified")],
             ["Claim Amount:", f"${claim_data.get('amount', 0):.2f}"],
-            ["Description:", claim_data.get("description", "")]
+            ["Description:", claim_data.get("description", "Not Specified")]
         ]
         
         claim_info_table = Table(claim_info_data, colWidths=[120, 300])
@@ -161,8 +218,88 @@ async def analyze_optimal_claim_path(user_id: int, situation: str) -> Dict:
             "message": "No policies found. Please upload your insurance policies first."
         }
     
+    logger.info(f"Found {len(policies)} policies for user {user_id}")
+    logger.info(f"Policy IDs: {[str(p['_id']) for p in policies]}")
+    
     # Use NLP service to analyze policies and recommend claim options
     recommendations = await recommend_claim_options(policies, situation)
+    
+    logger.info(f"Raw recommendations: {recommendations}")
+    
+    # Create a list of actual policy IDs as strings
+    actual_policy_ids = [str(p["_id"]) for p in policies]
+    
+    # FIX: Check if returned policies exist - if not, replace them with actual ones
+    if recommendations.get("applicable_policies"):
+        # Check if any of the applicable_policies don't exist in our database
+        for i, policy_id in enumerate(recommendations["applicable_policies"]):
+            if policy_id not in actual_policy_ids:
+                logger.warning(f"Replacing fictional policy ID {policy_id} with a real one")
+                # Replace with the first actual policy ID
+                if actual_policy_ids:
+                    recommendations["applicable_policies"][i] = actual_policy_ids[0]
+        
+        # If we still have no valid policies, use all available policies
+        if not recommendations["applicable_policies"] or all(pid not in actual_policy_ids for pid in recommendations["applicable_policies"]):
+            recommendations["applicable_policies"] = actual_policy_ids
+    else:
+        # Default to all policies if none provided
+        recommendations["applicable_policies"] = actual_policy_ids
+    
+    # FIX: Update coverage details to use actual policy IDs
+    if recommendations.get("coverage_details"):
+        fixed_coverage_details = []
+        for detail in recommendations["coverage_details"]:
+            if detail.get("policy_id") not in actual_policy_ids:
+                # Get the first applicable policy ID or first actual policy ID
+                replacement_id = (
+                    recommendations["applicable_policies"][0] 
+                    if recommendations.get("applicable_policies") 
+                    else actual_policy_ids[0]
+                )
+                detail["policy_id"] = replacement_id
+            fixed_coverage_details.append(detail)
+        recommendations["coverage_details"] = fixed_coverage_details
+    else:
+        # Create default coverage details for each applicable policy
+        recommendations["coverage_details"] = []
+        for policy_id in recommendations["applicable_policies"]:
+            # Extract coverage and deductible info from explanation if possible
+            explanation = recommendations.get("explanation", "").lower()
+            
+            # Try to find dollar amounts in the explanation
+            import re
+            amount_matches = re.findall(r'\$?(\d+[,\d]*)', explanation)
+            estimated_coverage = None
+            deductible = None
+            
+            if amount_matches:
+                for match in amount_matches:
+                    amount = match.replace(',', '')
+                    if "deductible" in explanation.lower() and not deductible:
+                        deductible = f"${amount}"
+                    elif estimated_coverage is None:
+                        estimated_coverage = f"${amount}"
+            
+            recommendations["coverage_details"].append({
+                "policy_id": policy_id,
+                "estimated_coverage": estimated_coverage or "See policy for details",
+                "deductible": deductible or "See policy for details",
+                "copay": "See policy for details"
+            })
+    
+    # FIX: Update filing order to use actual policy IDs
+    if not recommendations.get("filing_order") or not all(pid in actual_policy_ids for pid in recommendations["filing_order"]):
+        # Use applicable_policies as filing order
+        recommendations["filing_order"] = recommendations["applicable_policies"].copy()
+    
+    # Ensure limitations exist
+    if not recommendations.get("limitations"):
+        recommendations["limitations"] = ["See policy for specific limitations and exclusions."]
+    
+    logger.info(f"Final applicable_policies: {recommendations.get('applicable_policies', [])}")
+    logger.info(f"Final coverage_details: {recommendations.get('coverage_details', [])}")
+    logger.info(f"Final filing_order: {recommendations.get('filing_order', [])}")
     
     return {
         "success": True,

@@ -305,22 +305,34 @@ async def recommend_claim_options_openai(policies: List[Dict], situation: str) -
         4. The recommended order to file claims if multiple policies apply
         5. Any exclusions or limitations that might affect the claim
         
-        Provide recommendations in a structured JSON format with these fields:
-        - applicable_policies: array of policy IDs that apply
-        - coverage_details: array of objects with policy_id, estimated_coverage, deductible, copay
-        - filing_order: recommended sequence of policies to file claims with
-        - limitations: any important limitations or exclusions
-        - explanation: brief explanation of the recommendation
+        IMPORTANT: Your response MUST be a valid JSON object with the following structure:
+        {{
+          "applicable_policies": ["policy_id_1", "policy_id_2"],
+          "coverage_details": [
+            {{
+              "policy_id": "policy_id_1",
+              "estimated_coverage": "$500",
+              "deductible": "$100",
+              "copay": "20%"
+            }}
+          ],
+          "filing_order": ["policy_id_1", "policy_id_2"],
+          "limitations": ["Limitation 1", "Limitation 2"],
+          "explanation": "Brief explanation of the recommendation"
+        }}
         
-        Output must be valid JSON.
+        Make sure to return data in the exact format specified, with all fields included, even if some are empty arrays.
+        All fields must be present in the JSON response.
+        The response MUST be valid JSON only without any additional text or formatting.
         """
         
         response = await openai_client.chat.completions.create(
             model="gpt-4",
             messages=[
-                {"role": "system", "content": "You are a helpful insurance claims assistant providing accurate recommendations based only on the provided policy details."},
+                {"role": "system", "content": "You are a helpful insurance claims assistant providing accurate recommendations based only on the provided policy details. You MUST return data in JSON format with all required fields."},
                 {"role": "user", "content": prompt}
             ],
+            response_format={"type": "json_object"},
             max_tokens=1500,
             temperature=0.3
         )
@@ -329,25 +341,52 @@ async def recommend_claim_options_openai(policies: List[Dict], situation: str) -
         
         # Extract JSON from the response
         try:
-            # Find JSON content (it might be wrapped in ```json ... ``` blocks)
-            json_content = content
-            if "```json" in content:
-                json_content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                json_content = content.split("```")[1].strip()
+            parsed_result = json.loads(content)
+            
+            # Ensure all required fields are present
+            default_structure = {
+                "applicable_policies": [],
+                "coverage_details": [],
+                "filing_order": [],
+                "limitations": [],
+                "explanation": ""
+            }
+            
+            # Add any missing fields
+            for key, default_value in default_structure.items():
+                if key not in parsed_result:
+                    parsed_result[key] = default_value
+            
+            return parsed_result
                 
-            return json.loads(json_content)
         except json.JSONDecodeError:
             logger.error("Failed to parse JSON from OpenAI response")
-            return {
-                "recommendations": [],
-                "message": "I analyzed your situation but couldn't generate a structured recommendation.",
-                "raw_analysis": content
+            # Try to extract key fields from the text response
+            fallback_result = {
+                "applicable_policies": [],
+                "coverage_details": [],
+                "filing_order": [],
+                "limitations": [],
+                "explanation": content.strip()
             }
+            
+            # Try to extract limitations if available
+            if "Important Limitations" in content:
+                limitations_text = content.split("Important Limitations")[1].strip()
+                limitations = [line.strip('- ').strip() for line in limitations_text.split('\n') if line.strip()]
+                fallback_result["limitations"] = limitations
+                
+            return fallback_result
             
     except Exception as e:
         logger.error(f"Error generating recommendations with OpenAI: {e}")
-        return {"recommendations": [], "message": "I encountered an error while analyzing your situation."}
+        return {
+            "applicable_policies": [],
+            "coverage_details": [],
+            "filing_order": [], 
+            "limitations": [],
+            "explanation": "I encountered an error while analyzing your situation."
+        }
 
 async def recommend_claim_options_gemini(policies: List[Dict], situation: str) -> Dict:
     """Recommend claim options using Google Gemini"""
@@ -372,14 +411,25 @@ async def recommend_claim_options_gemini(policies: List[Dict], situation: str) -
         4. The recommended order to file claims if multiple policies apply
         5. Any exclusions or limitations that might affect the claim
         
-        Provide recommendations in a structured JSON format with these fields:
-        - applicable_policies: array of policy IDs that apply
-        - coverage_details: array of objects with policy_id, estimated_coverage, deductible, copay
-        - filing_order: recommended sequence of policies to file claims with
-        - limitations: any important limitations or exclusions
-        - explanation: brief explanation of the recommendation
+        IMPORTANT: Your response MUST be a valid JSON object with the following structure:
+        {{
+          "applicable_policies": ["policy_id_1", "policy_id_2"],
+          "coverage_details": [
+            {{
+              "policy_id": "policy_id_1",
+              "estimated_coverage": "$500",
+              "deductible": "$100",
+              "copay": "20%"
+            }}
+          ],
+          "filing_order": ["policy_id_1", "policy_id_2"],
+          "limitations": ["Limitation 1", "Limitation 2"],
+          "explanation": "Brief explanation of the recommendation"
+        }}
         
-        Output must be valid JSON without any other text.
+        Make sure to return data in the exact format specified, with all fields included, even if some are empty arrays.
+        All fields must be present in the JSON response.
+        The response MUST be valid JSON only without any additional text or formatting.
         """
         
         generation_config = {
@@ -387,6 +437,7 @@ async def recommend_claim_options_gemini(policies: List[Dict], situation: str) -
             "top_p": 0.95,
             "top_k": 40,
             "max_output_tokens": 1500,
+            "response_mime_type": "application/json",
         }
         
         response = gemini_model.generate_content(
@@ -397,21 +448,43 @@ async def recommend_claim_options_gemini(policies: List[Dict], situation: str) -
         content = response.text
         
         try:
-            # Find JSON content (it might be wrapped in ```json ... ``` blocks)
-            json_content = content
-            if "```json" in content:
-                json_content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                json_content = content.split("```")[1].strip()
+            # Parse the JSON response
+            parsed_result = json.loads(content)
+            
+            # Ensure all required fields are present
+            default_structure = {
+                "applicable_policies": [],
+                "coverage_details": [],
+                "filing_order": [],
+                "limitations": [],
+                "explanation": ""
+            }
+            
+            # Add any missing fields
+            for key, default_value in default_structure.items():
+                if key not in parsed_result:
+                    parsed_result[key] = default_value
+            
+            return parsed_result
                 
-            return json.loads(json_content)
         except json.JSONDecodeError:
             logger.error("Failed to parse JSON from Gemini response")
-            return {
-                "recommendations": [],
-                "message": "I analyzed your situation but couldn't generate a structured recommendation.",
-                "raw_analysis": content
+            # Try to extract key fields from the text response
+            fallback_result = {
+                "applicable_policies": [],
+                "coverage_details": [],
+                "filing_order": [],
+                "limitations": [],
+                "explanation": content.strip()
             }
+            
+            # Try to extract limitations if available
+            if "Important Limitations" in content:
+                limitations_text = content.split("Important Limitations")[1].strip()
+                limitations = [line.strip('- ').strip() for line in limitations_text.split('\n') if line.strip()]
+                fallback_result["limitations"] = limitations
+                
+            return fallback_result
             
     except Exception as e:
         logger.error(f"Error generating recommendations with Gemini: {e}")

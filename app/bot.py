@@ -3,6 +3,7 @@ import logging
 import sys
 from pathlib import Path
 from typing import Dict, Any, List, Optional, BinaryIO, Union
+from datetime import datetime
 
 from aiogram import Bot, Dispatcher, Router, types
 from aiogram.client.default import DefaultBotProperties
@@ -134,7 +135,32 @@ async def ask_question_callback(callback_query: CallbackQuery, state: FSMContext
     # Get list of policies for user to choose from
     policy_keyboard = []
     for policy in policies:
-        policy_name = policy.get("provider", "Unknown") + " - " + policy.get("policy_type", "Policy")
+        # Try to create a more descriptive policy name using available fields
+        provider = policy.get("provider", "")
+        policy_type = policy.get("policy_type", "")
+        policy_number = policy.get("policy_number", "")
+        
+        if provider and policy_type:
+            policy_name = f"{provider} - {policy_type}"
+        elif provider:
+            policy_name = provider
+        elif policy_type:
+            policy_name = f"Policy type: {policy_type}"
+        elif policy_number:
+            policy_name = f"Policy #{policy_number}"
+        else:
+            # If no identifying information, use part of the ID
+            policy_id = str(policy['_id'])
+            policy_name = f"Policy {policy_id[-6:]}"
+            
+        # Add coverage areas if available
+        if policy.get("coverage_areas"):
+            areas = list(policy.get("coverage_areas", {}).keys())
+            if areas:
+                policy_name += f" ({', '.join(areas[:2])})"
+                if len(areas) > 2:
+                    policy_name += "..."
+        
         policy_keyboard.append([
             InlineKeyboardButton(
                 text=policy_name, 
@@ -167,7 +193,32 @@ async def create_claim_callback(callback_query: CallbackQuery, state: FSMContext
     # Get list of policies for user to choose from
     policy_keyboard = []
     for policy in policies:
-        policy_name = policy.get("provider", "Unknown") + " - " + policy.get("policy_type", "Policy")
+        # Try to create a more descriptive policy name using available fields
+        provider = policy.get("provider", "")
+        policy_type = policy.get("policy_type", "")
+        policy_number = policy.get("policy_number", "")
+        
+        if provider and policy_type:
+            policy_name = f"{provider} - {policy_type}"
+        elif provider:
+            policy_name = provider
+        elif policy_type:
+            policy_name = f"Policy type: {policy_type}"
+        elif policy_number:
+            policy_name = f"Policy #{policy_number}"
+        else:
+            # If no identifying information, use part of the ID
+            policy_id = str(policy['_id'])
+            policy_name = f"Policy {policy_id[-6:]}"
+            
+        # Add coverage areas if available
+        if policy.get("coverage_areas"):
+            areas = list(policy.get("coverage_areas", {}).keys())
+            if areas:
+                policy_name += f" ({', '.join(areas[:2])})"
+                if len(areas) > 2:
+                    policy_name += "..."
+        
         policy_keyboard.append([
             InlineKeyboardButton(
                 text=policy_name, 
@@ -570,81 +621,131 @@ async def handle_situation_description(message: Message, state: FSMContext) -> N
         
         recommendations = result["recommendations"]
         
-        # Format the recommendations into a user-friendly message
-        if "applicable_policies" in recommendations and recommendations["applicable_policies"]:
-            response = "Based on your situation, here are my recommendations:\n\n"
+        # Start with a default response
+        response = "Based on your situation, here are my recommendations:\n\n"
+        
+        # Always include the explanation if available
+        if recommendations.get("explanation"):
+            response += f"{recommendations['explanation']}\n\n"
+        
+        # Get policies for reference
+        policies = await db.get_policies(user_id)
+        
+        # Create a policy map with both ObjectId and string ID keys for flexibility
+        policy_map = {}
+        for p in policies:
+            str_id = str(p["_id"])
+            # Store the policy with both ObjectId and string key for easier lookup
+            policy_map[str_id] = p
+            policy_map[p["_id"]] = p
             
-            if "explanation" in recommendations:
-                response += f"{recommendations['explanation']}\n\n"
+        logger.info(f"Policy map keys: {list(policy_map.keys())}")
+        
+        # Format and add applicable policies section
+        applicable_policies = recommendations.get("applicable_policies", [])
+        logger.info(f"Processing applicable policies: {applicable_policies}")
+        
+        response += "📋 Applicable Policies:\n"
+        if applicable_policies:
+            for policy_id in applicable_policies:
+                # Try to handle both string and ObjectId
+                policy_id_str = str(policy_id)
+                policy = policy_map.get(policy_id) or policy_map.get(policy_id_str)
                 
-            response += "📋 Applicable Policies:\n"
-            policies = await db.get_policies(user_id)
-            policy_map = {str(p["_id"]): p for p in policies}
-            
-            for policy_id in recommendations["applicable_policies"]:
-                policy = policy_map.get(policy_id)
                 if policy:
                     provider = policy.get("provider", "Unknown")
                     policy_type = policy.get("policy_type", "Policy")
-                    response += f"• {provider} - {policy_type}\n"
-            
-            if "coverage_details" in recommendations:
-                response += "\n💰 Coverage Details:\n"
-                for detail in recommendations["coverage_details"]:
-                    policy_id = detail.get("policy_id")
-                    policy = policy_map.get(policy_id)
-                    if policy:
-                        provider = policy.get("provider", "Unknown")
-                        estimated = detail.get("estimated_coverage", "Unknown")
-                        deductible = detail.get("deductible", "Unknown")
-                        copay = detail.get("copay", "Unknown")
-                        
-                        response += f"• {provider}:\n"
-                        response += f"  - Estimated coverage: {estimated}\n"
-                        response += f"  - Deductible: {deductible}\n"
-                        response += f"  - Copay/Coinsurance: {copay}\n"
-            
-            if "filing_order" in recommendations and recommendations["filing_order"]:
-                response += "\n📝 Recommended Filing Order:\n"
-                for i, policy_id in enumerate(recommendations["filing_order"], 1):
-                    policy = policy_map.get(policy_id)
-                    if policy:
-                        provider = policy.get("provider", "Unknown")
-                        response += f"{i}. {provider}\n"
-            
-            if "limitations" in recommendations:
-                response += "\n⚠️ Important Limitations:\n"
-                response += f"{recommendations['limitations']}\n"
-            
-            # Create a keyboard with policies to create claims for
-            keyboard = []
-            
-            for policy_id in recommendations["applicable_policies"]:
-                policy = policy_map.get(policy_id)
+                    policy_number = policy.get("policy_number", "")
+                    response += f"• {provider} - {policy_type}"
+                    if policy_number:
+                        response += f" (#{policy_number})"
+                    response += "\n"
+                else:
+                    # Log the missing policy
+                    logger.warning(f"Policy not found for ID: {policy_id}, available IDs: {list(policy_map.keys())}")
+                    response += f"• Policy ID: {policy_id} (Details not found)\n"
+        else:
+            response += "• No specific policies identified\n"
+        
+        # Format and add coverage details section
+        coverage_details = recommendations.get("coverage_details", [])
+        response += "\n💰 Coverage Details:\n"
+        if coverage_details:
+            for detail in coverage_details:
+                policy_id = detail.get("policy_id")
+                policy_id_str = str(policy_id)
+                policy = policy_map.get(policy_id) or policy_map.get(policy_id_str)
+                
                 if policy:
                     provider = policy.get("provider", "Unknown")
-                    keyboard.append([
-                        InlineKeyboardButton(
-                            text=f"Create Claim with {provider}", 
-                            callback_data=f"claim_policy_{policy_id}"
-                        )
-                    ])
-            
-            keyboard.append([InlineKeyboardButton(text="← Back to Menu", callback_data="back_to_menu")])
-            keyboard_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
-            
-            await message.answer(response, reply_markup=keyboard_markup)
+                    estimated = detail.get("estimated_coverage", "Unknown")
+                    deductible = detail.get("deductible", "Unknown")
+                    copay = detail.get("copay", "Unknown")
+                    
+                    response += f"• {provider}:\n"
+                    response += f"  - Estimated coverage: {estimated}\n"
+                    response += f"  - Deductible: {deductible}\n"
+                    response += f"  - Copay/Coinsurance: {copay}\n"
+                else:
+                    logger.warning(f"Policy not found for coverage detail with ID: {policy_id}")
+                    response += f"• Policy ID {policy_id}:\n"
+                    response += f"  - Estimated coverage: {detail.get('estimated_coverage', 'Unknown')}\n"
+                    response += f"  - Deductible: {detail.get('deductible', 'Unknown')}\n"
+                    response += f"  - Copay/Coinsurance: {detail.get('copay', 'Unknown')}\n"
         else:
-            await message.answer(
-                "Based on your situation and the policies you've uploaded, I couldn't find any applicable coverage. "
-                "You may want to consult directly with your insurance provider for more specific information.",
-                reply_markup=await get_main_menu_keyboard()
-            )
+            response += "• See policy documents for specific coverage details\n"
         
+        # Format and add filing order section
+        filing_order = recommendations.get("filing_order", [])
+        response += "\n📝 Recommended Filing Order:\n"
+        if filing_order:
+            for i, policy_id in enumerate(filing_order, 1):
+                policy_id_str = str(policy_id)
+                policy = policy_map.get(policy_id) or policy_map.get(policy_id_str)
+                
+                if policy:
+                    provider = policy.get("provider", "Unknown")
+                    response += f"{i}. {provider}\n"
+                else:
+                    logger.warning(f"Policy not found for filing order with ID: {policy_id}")
+                    response += f"{i}. Policy ID: {policy_id} (Details not found)\n"
+        else:
+            response += "• No specific filing order recommended\n"
+        
+        # Format and add limitations section
+        limitations = recommendations.get("limitations", [])
+        response += "\n⚠️ Important Limitations:\n"
+        if limitations:
+            for limitation in limitations:
+                response += f"• {limitation}\n"
+        else:
+            response += "• Review your policy documents for specific limitations and exclusions\n"
+        
+        # Create a keyboard with policies to create claims for
+        keyboard = []
+        
+        for policy_id in applicable_policies:
+            policy_id_str = str(policy_id)
+            policy = policy_map.get(policy_id) or policy_map.get(policy_id_str)
+            
+            if policy:
+                provider = policy.get("provider", "Unknown")
+                keyboard.append([
+                    InlineKeyboardButton(
+                        text=f"Create Claim with {provider}", 
+                        callback_data=f"claim_policy_{policy_id_str}"
+                    )
+                ])
+        
+        keyboard.append([InlineKeyboardButton(text="← Back to Menu", callback_data="back_to_menu")])
+        keyboard_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+        
+        await message.answer(response, reply_markup=keyboard_markup)
         await state.set_state(UserStates.main_menu)
         
     except Exception as e:
         logger.error(f"Error generating claim recommendations: {e}")
+        logger.exception("Full traceback:")
         await bot.delete_message(chat_id=message.chat.id, message_id=processing_message.message_id)
         await message.answer(
             "I'm sorry, I encountered an error while analyzing your situation. Please try again later.",
@@ -702,25 +803,27 @@ async def claim_type_callback(callback_query: CallbackQuery, state: FSMContext) 
     await state.update_data(claim_type=claim_type)
     
     await callback_query.answer()
+    
+    # Guide user through form step by step
     await callback_query.message.answer(
-        f"Please provide the following information for your {claim_type} claim:\n\n"
-        f"1. Date of service (YYYY-MM-DD)\n"
-        f"2. Provider name\n"
-        f"3. Amount\n"
-        f"4. Brief description of the service\n\n"
-        f"Example: 2023-05-15, Dr. Smith, 120.50, Annual checkup"
+        f"You're creating a {claim_type} claim. Let's fill out the details step by step.\n\n"
+        f"First, what was the date of service? (Please use YYYY-MM-DD format)"
     )
     
+    # Set state to a new sub-state for the form filling process
     await state.set_state(UserStates.filling_claim_form)
+    # Track which field we're collecting
+    await state.update_data(current_field="service_date")
 
 @router.message(UserStates.filling_claim_form)
-async def handle_claim_form_submission(message: Message, state: FSMContext) -> None:
-    """Process the claim form submission"""
+async def handle_claim_form_field(message: Message, state: FSMContext) -> None:
+    """Process each field of the claim form one by one"""
     user_data = await state.get_data()
     policy_id = user_data.get("selected_policy_id")
     claim_type = user_data.get("claim_type")
+    current_field = user_data.get("current_field")
     
-    if not policy_id or not claim_type:
+    if not policy_id or not claim_type or not current_field:
         await message.answer(
             "I'm missing some information about your claim. Let's start over.",
             reply_markup=await get_main_menu_keyboard()
@@ -728,61 +831,148 @@ async def handle_claim_form_submission(message: Message, state: FSMContext) -> N
         await state.set_state(UserStates.main_menu)
         return
     
-    # Parse the claim information from the message
+    # Process the current field
     try:
-        # Try to parse the comma-separated values
-        parts = [part.strip() for part in message.text.split(",")]
-        
-        if len(parts) < 4:
-            raise ValueError("Not enough information provided")
-        
-        service_date = parts[0]
-        provider_name = parts[1]
-        try:
-            amount = float(parts[2].replace("$", "").strip())
-        except ValueError:
-            amount = 0.0
-        
-        description = parts[3]
-        
+        # Update the state with the current field's value
+        if current_field == "service_date":
+            # Validate date format
+            try:
+                input_date = message.text.strip()
+                datetime.strptime(input_date, "%Y-%m-%d")
+                await state.update_data(service_date=input_date)
+            except ValueError:
+                await message.answer(
+                    "Please provide a valid date in YYYY-MM-DD format (e.g., 2023-05-15):"
+                )
+                return
+                
+            # Move to next field
+            await state.update_data(current_field="provider_name")
+            await message.answer("Great! Now, what is the name of the healthcare provider or facility?")
+            
+        elif current_field == "provider_name":
+            provider_name = message.text.strip()
+            if not provider_name:
+                await message.answer("Please provide the name of the provider:")
+                return
+                
+            await state.update_data(provider_name=provider_name)
+            
+            # Move to next field
+            await state.update_data(current_field="amount")
+            await message.answer(
+                "What is the total amount of the claim? (Just enter the number, e.g., 120.50)"
+            )
+            
+        elif current_field == "amount":
+            try:
+                # Remove any currency symbols and commas
+                amount_text = message.text.strip().replace("$", "").replace(",", "")
+                amount = float(amount_text)
+                await state.update_data(amount=amount)
+            except ValueError:
+                await message.answer(
+                    "Please provide a valid amount (e.g., 120.50):"
+                )
+                return
+                
+            # Move to next field
+            await state.update_data(current_field="description")
+            await message.answer(
+                "Please provide a brief description of the service or treatment:"
+            )
+            
+        elif current_field == "description":
+            description = message.text.strip()
+            if not description:
+                await message.answer("Please provide a description:")
+                return
+                
+            await state.update_data(description=description)
+            
+            # All fields collected, show summary and confirm
+            user_data = await state.get_data()
+            
+            summary = (
+                f"📋 Claim Summary:\n\n"
+                f"Type: {user_data.get('claim_type')}\n"
+                f"Date: {user_data.get('service_date')}\n"
+                f"Provider: {user_data.get('provider_name')}\n"
+                f"Amount: ${user_data.get('amount', 0):.2f}\n"
+                f"Description: {user_data.get('description')}\n\n"
+                f"Is this information correct?"
+            )
+            
+            keyboard = [
+                [InlineKeyboardButton(text="✅ Submit Claim", callback_data="confirm_claim")],
+                [InlineKeyboardButton(text="❌ Cancel", callback_data="back_to_menu")]
+            ]
+            keyboard_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+            
+            await message.answer(summary, reply_markup=keyboard_markup)
+            
+            # Set state to reviewing claim
+            await state.set_state(UserStates.reviewing_claim)
+    
+    except Exception as e:
+        logger.error(f"Error processing claim field: {e}")
+        await message.answer(
+            "I encountered an error while processing your information. Let's try again or go back to the main menu with /menu."
+        )
+
+# Add handler for claim confirmation
+@router.callback_query(lambda c: c.data == "confirm_claim")
+async def confirm_claim_callback(callback_query: CallbackQuery, state: FSMContext) -> None:
+    """Handle claim confirmation"""
+    user_data = await state.get_data()
+    policy_id = user_data.get("selected_policy_id")
+    
+    await callback_query.answer()
+    
+    processing_message = await callback_query.message.answer("Creating your claim...")
+    
+    try:
         # Create the claim data
         claim_data = {
             "policy_id": policy_id,
-            "claim_type": claim_type,
-            "service_date": service_date,
-            "provider_name": provider_name,
-            "amount": amount,
-            "description": description,
+            "claim_type": user_data.get("claim_type"),
+            "service_date": user_data.get("service_date"),
+            "provider_name": user_data.get("provider_name"),
+            "amount": user_data.get("amount", 0),
+            "description": user_data.get("description"),
             "status": "pending"
         }
         
         # Save the claim
-        created_claim = await db.create_claim(message.from_user.id, claim_data)
+        created_claim = await db.create_claim(callback_query.from_user.id, claim_data)
         
         if not created_claim:
             raise ValueError("Failed to create claim")
         
         # Generate a claim form
         form_path = await claim_service.generate_claim_form(
-            message.from_user.id, 
+            callback_query.from_user.id, 
             policy_id, 
             claim_data
         )
         
+        # Delete processing message
+        await bot.delete_message(chat_id=callback_query.message.chat.id, message_id=processing_message.message_id)
+        
         # Send a success message
-        await message.answer(
+        await callback_query.message.answer(
             f"✅ Your claim has been created successfully!\n\n"
-            f"Claim Type: {claim_type}\n"
-            f"Provider: {provider_name}\n"
-            f"Amount: ${amount:.2f}\n"
+            f"Claim Type: {claim_data['claim_type']}\n"
+            f"Provider: {claim_data['provider_name']}\n"
+            f"Amount: ${claim_data['amount']:.2f}\n"
             f"Status: Pending\n\n"
             f"You can track the status of your claim using the 'Track Claims' option."
         )
         
         # Send the claim form if it was generated
         if form_path:
-            await message.answer("Here's your completed claim form:")
-            await message.answer_document(FSInputFile(form_path))
+            await callback_query.message.answer("Here's your completed claim form:")
+            await callback_query.message.answer_document(FSInputFile(form_path))
             
             # Clean up the file
             try:
@@ -791,7 +981,7 @@ async def handle_claim_form_submission(message: Message, state: FSMContext) -> N
                 logger.error(f"Error deleting claim form file {form_path}: {e}")
         
         # Return to main menu
-        await message.answer(
+        await callback_query.message.answer(
             "What would you like to do next?",
             reply_markup=await get_main_menu_keyboard()
         )
@@ -799,12 +989,12 @@ async def handle_claim_form_submission(message: Message, state: FSMContext) -> N
         
     except Exception as e:
         logger.error(f"Error creating claim: {e}")
-        await message.answer(
-            "I couldn't process your claim information. Please make sure it's in the format:\n"
-            "Date (YYYY-MM-DD), Provider name, Amount, Description\n\n"
-            "For example: 2023-05-15, Dr. Smith, 120.50, Annual checkup\n\n"
-            "Please try again or go back to the main menu with /menu."
+        await bot.delete_message(chat_id=callback_query.message.chat.id, message_id=processing_message.message_id)
+        await callback_query.message.answer(
+            "I couldn't process your claim. Please try again later.",
+            reply_markup=await get_main_menu_keyboard()
         )
+        await state.set_state(UserStates.main_menu)
 
 # Handle viewing policy details
 @router.callback_query(lambda c: c.data.startswith("view_policy_"))
