@@ -1,7 +1,7 @@
 # Insurance Claim Assistant Bot
 
 A smart Telegram bot that helps users understand and file insurance claims.
-
+#### ** We pivoted from leveraging AI to onboard beginner users on crypto products, we destoryed the old branch main. this is the pivoted idea.
 ## Features
 
 1. **Policy Upload & AI Understanding**
