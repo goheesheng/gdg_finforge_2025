@@ -210,11 +210,46 @@ async def handle_name_entry(message: Message, state: FSMContext) -> None:
     # Send confirmation
     await message.answer(f"Thank you, {full_name}!")
     
-    # Continue with email collection
-    await message.answer("Please provide your email address:")
-    await state.set_state(UserStates.entering_email)
-    return
+    # Check where to continue based on flow
+    if continue_to == "profile_update":
+        # Return to profile view
+        await show_profile(message, user_id, state)
+        return
+    elif continue_to == "initial_setup":
+        # Continue with email collection for initial setup
+        await message.answer("Please provide your email address:")
+        await state.set_state(UserStates.entering_email)
+        return
     
+    # Check if we need additional information for claim flow
+    profile_status = await check_user_profile(user_id)
+    
+    # Continue with email collection if needed
+    if profile_status["needs_email"]:
+        await message.answer("Please provide your email address:")
+        await state.set_state(UserStates.entering_email)
+        return
+        
+    # Continue with phone collection if needed
+    if profile_status["needs_phone"]:
+        await message.answer("Please provide your phone number for contact purposes:")
+        await state.set_state(UserStates.entering_phone)
+        return
+    
+    # Check if we're in the middle of a claim flow
+    if continue_to == "claim_provider":
+        # Continue with claim provider
+        await message.answer("Now, what is the name of the healthcare provider or facility?")
+        await state.set_state(UserStates.claim_provider)
+        return
+    
+    # Show main menu if not continuing to a specific state
+    await state.set_state(UserStates.main_menu)
+    await message.answer(
+        "Main Menu - What would you like to do?",
+        reply_markup=await get_main_menu_keyboard()
+    )
+
 @router.message(UserStates.entering_email)
 async def handle_email_entry(message: Message, state: FSMContext) -> None:
     """Process user's email entry"""
@@ -233,6 +268,12 @@ async def handle_email_entry(message: Message, state: FSMContext) -> None:
     
     # Send confirmation
     await message.answer(f"Thank you! Your email ({email}) has been saved.")
+    
+    # Check where to continue based on flow
+    if continue_to == "profile_update":
+        # Return to profile view
+        await show_profile(message, user_id, state)
+        return
     
     # Always continue with phone collection in the initial flow
     if continue_to == "initial_setup":
@@ -288,6 +329,12 @@ async def handle_phone_entry(message: Message, state: FSMContext) -> None:
     
     # Send confirmation
     await message.answer(f"Thank you! Your phone number has been saved.")
+    
+    # Check where to continue based on flow
+    if continue_to == "profile_update":
+        # Return to profile view
+        await show_profile(message, user_id, state)
+        return
     
     # If this is the initial setup, show the main menu
     if continue_to == "initial_setup":
@@ -876,13 +923,9 @@ async def handle_situation_description(message: Message, state: FSMContext) -> N
                 policy = policy_map.get(policy_id) or policy_map.get(policy_id_str)
                 
                 if policy:
-                    provider = policy.get("provider", "Unknown")
-                    policy_type = policy.get("policy_type", "Policy")
-                    policy_number = policy.get("policy_number", "")
-                    response += f"• {provider} - {policy_type}"
-                    if policy_number:
-                        response += f" (#{policy_number})"
-                    response += "\n"
+                    # Use improved policy naming logic
+                    policy_name = get_descriptive_policy_name(policy)
+                    response += f"• {policy_name}\n"
                 else:
                     # Log the missing policy
                     logger.warning(f"Policy not found for ID: {policy_id}, available IDs: {list(policy_map.keys())}")
@@ -900,12 +943,13 @@ async def handle_situation_description(message: Message, state: FSMContext) -> N
                 policy = policy_map.get(policy_id) or policy_map.get(policy_id_str)
                 
                 if policy:
-                    provider = policy.get("provider", "Unknown")
+                    # Use improved policy naming logic
+                    policy_name = get_descriptive_policy_name(policy)
                     estimated = detail.get("estimated_coverage", "Unknown")
                     deductible = detail.get("deductible", "Unknown")
                     copay = detail.get("copay", "Unknown")
                     
-                    response += f"• {provider}:\n"
+                    response += f"• {policy_name}:\n"
                     response += f"  - Estimated coverage: {estimated}\n"
                     response += f"  - Deductible: {deductible}\n"
                     response += f"  - Copay/Coinsurance: {copay}\n"
@@ -927,8 +971,9 @@ async def handle_situation_description(message: Message, state: FSMContext) -> N
                 policy = policy_map.get(policy_id) or policy_map.get(policy_id_str)
                 
                 if policy:
-                    provider = policy.get("provider", "Unknown")
-                    response += f"{i}. {provider}\n"
+                    # Use improved policy naming logic
+                    policy_name = get_descriptive_policy_name(policy)
+                    response += f"{i}. {policy_name}\n"
                 else:
                     logger.warning(f"Policy not found for filing order with ID: {policy_id}")
                     response += f"{i}. Policy ID: {policy_id} (Details not found)\n"
@@ -952,10 +997,11 @@ async def handle_situation_description(message: Message, state: FSMContext) -> N
             policy = policy_map.get(policy_id) or policy_map.get(policy_id_str)
             
             if policy:
-                provider = policy.get("provider", "Unknown")
+                # Use improved policy naming logic
+                policy_name = get_descriptive_policy_name(policy)
                 keyboard.append([
                     InlineKeyboardButton(
-                        text=f"Create Claim with {provider}", 
+                        text=f"Create Claim with {policy_name.split(' (')[0]}", 
                         callback_data=f"claim_policy_{policy_id_str}"
                     )
                 ])
@@ -975,6 +1021,36 @@ async def handle_situation_description(message: Message, state: FSMContext) -> N
             reply_markup=await get_main_menu_keyboard()
         )
         await state.set_state(UserStates.main_menu)
+
+# Helper function to get a descriptive policy name
+def get_descriptive_policy_name(policy: Dict) -> str:
+    """Construct a descriptive policy name using available fields"""
+    provider = policy.get("provider", "")
+    policy_type = policy.get("policy_type", "")
+    policy_number = policy.get("policy_number", "")
+    
+    if provider and policy_type:
+        policy_name = f"{provider} - {policy_type}"
+    elif provider:
+        policy_name = provider
+    elif policy_type:
+        policy_name = f"Policy type: {policy_type}"
+    elif policy_number:
+        policy_name = f"Policy #{policy_number}"
+    else:
+        # If no identifying information, use part of the ID
+        policy_id = str(policy['_id'])
+        policy_name = f"Policy {policy_id[-6:]}"
+        
+    # Add coverage areas if available
+    if policy.get("coverage_areas"):
+        areas = list(policy.get("coverage_areas", {}).keys())
+        if areas:
+            policy_name += f" ({', '.join(areas[:2])})"
+            if len(areas) > 2:
+                policy_name += "..."
+                
+    return policy_name
 
 # Handle claim creation
 @router.callback_query(lambda c: c.data.startswith("claim_policy_"))
@@ -1352,16 +1428,26 @@ async def view_claim_callback(callback_query: CallbackQuery, state: FSMContext) 
 async def my_profile_callback(callback_query: CallbackQuery, state: FSMContext) -> None:
     """Handle the my profile button"""
     user_id = callback_query.from_user.id
-    
+    await callback_query.answer()
+    await show_profile(callback_query, user_id, state)
+
+# Helper function to show user profile
+async def show_profile(message: Union[Message, CallbackQuery], user_id: int, state: FSMContext) -> None:
+    """Show the user profile information"""
     # Get user details
     user = await db.get_user(user_id)
-    await callback_query.answer()
     
     if not user:
-        await callback_query.message.answer(
-            "Error retrieving your profile information. Please try again later.",
-            reply_markup=await get_main_menu_keyboard()
-        )
+        if isinstance(message, CallbackQuery):
+            await message.message.answer(
+                "Error retrieving your profile information. Please try again later.",
+                reply_markup=await get_main_menu_keyboard()
+            )
+        else:
+            await message.answer(
+                "Error retrieving your profile information. Please try again later.",
+                reply_markup=await get_main_menu_keyboard()
+            )
         await state.set_state(UserStates.main_menu)
         return
     
@@ -1392,7 +1478,10 @@ async def my_profile_callback(callback_query: CallbackQuery, state: FSMContext) 
     ]
     profile_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
     
-    await callback_query.message.answer(profile_text, reply_markup=profile_markup)
+    if isinstance(message, CallbackQuery):
+        await message.message.answer(profile_text, reply_markup=profile_markup)
+    else:
+        await message.answer(profile_text, reply_markup=profile_markup)
 
 # Add update name handler
 @router.callback_query(lambda c: c.data == "update_name")
@@ -1401,6 +1490,8 @@ async def update_name_callback(callback_query: CallbackQuery, state: FSMContext)
     await callback_query.answer()
     await callback_query.message.answer("Please enter your full name (first and last name):")
     await state.set_state(UserStates.entering_name)
+    # Flag that we're coming from profile page, not initial setup
+    await state.update_data(continue_to="profile_update")
 
 # Add update email handler
 @router.callback_query(lambda c: c.data == "update_email")
@@ -1409,6 +1500,8 @@ async def update_email_callback(callback_query: CallbackQuery, state: FSMContext
     await callback_query.answer()
     await callback_query.message.answer("Please enter your new email address:")
     await state.set_state(UserStates.entering_email)
+    # Flag that we're coming from profile page
+    await state.update_data(continue_to="profile_update")
 
 # Add update phone handler
 @router.callback_query(lambda c: c.data == "update_phone")
@@ -1417,6 +1510,8 @@ async def update_phone_callback(callback_query: CallbackQuery, state: FSMContext
     await callback_query.answer()
     await callback_query.message.answer("Please enter your new phone number:")
     await state.set_state(UserStates.entering_phone)
+    # Flag that we're coming from profile page
+    await state.update_data(continue_to="profile_update")
 
 # Run the bot
 async def main() -> None:
