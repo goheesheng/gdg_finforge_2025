@@ -29,21 +29,25 @@ A smart Telegram bot that helps users understand and file insurance claims.
    - Auto-generate filled claim forms
    - Download or receive via email
 
+물론이죠! 아래는 당신이 원하는 대로 Google Cloud Vision 설정 안내를 **4번과 6번 사이**에 맞게 자연스럽게 삽입한 **수정된 `Setup Instructions`**입니다:
+
+---
+
 ## Setup Instructions
 
-1. Clone this repository
+1. Clone this repository  
 2. Create a `.env` file with the following variables (or copy from `.env.example`):
-   ```
+   ```env
    TELEGRAM_BOT_TOKEN=your_telegram_bot_token
    OPENAI_API_KEY=your_openai_api_key
    GOOGLE_APPLICATION_CREDENTIALS=path_to_google_credentials.json
    MONGODB_URI=your_mongodb_connection_string
    GOOGLE_GEMINI_API_KEY=your_gemini_api_key
-   USE_GOOGLE_VISION=False
+   USE_GOOGLE_VISION=True
    USE_GOOGLE_GEMINI=True
    ```
 3. Install dependencies:
-   ```
+   ```bash
    pip install -r requirements.txt
    ```
 4. Install Tesseract OCR:
@@ -51,8 +55,30 @@ A smart Telegram bot that helps users understand and file insurance claims.
    - For Ubuntu: `sudo apt install tesseract-ocr`
    - For Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki
 
-5. Run the bot:
-   ```
+5. Set up Google Cloud Vision API (if `USE_GOOGLE_VISION=True`):
+   - Go to [https://console.cloud.google.com/](https://console.cloud.google.com/)
+   - Create a project (e.g., `insurance-bot-project`)
+   - Enable **Cloud Vision API** under **APIs & Services > Library**
+   - Create a **Service Account** under **IAM & Admin > Service Accounts**
+     - Assign at least the `Vision AI User` role
+     - Generate and download a **JSON key file**
+   - Set the path to the key file in your `.env`:
+     ```env
+     GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/your/insurance-bot-key.json
+     ```
+   - (Optional) You can also set it in your code using:
+     ```python
+     import os
+     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/absolute/path/to/key.json"
+     ```
+   - Make sure to **exclude the `.json` file from version control**:
+     Add this to `.gitignore`:
+     ```txt
+     *.json
+     ```
+
+6. Run the bot:
+   ```bash
    python -m app.bot
    ```
 
