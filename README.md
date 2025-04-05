@@ -2,7 +2,10 @@
 
 ### Using Python Version 3.13.2
 
-### For windows run
+### For Windows run
 ` pip install -r windows_requirements.txt`
+
+### For Mac run
+` pip install -r mac_requirements.txt`
 
 ### Do remember to update your .env file with the API keys
