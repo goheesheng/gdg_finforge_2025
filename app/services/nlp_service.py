@@ -27,16 +27,28 @@ def convert_mongo_types(obj):
 
 logger = logging.getLogger(__name__)
 
-# Initialize OpenAI
-if OPENAI_API_KEY:
-    openai.api_key = OPENAI_API_KEY
+# # Initialize OpenAI
+# if OPENAI_API_KEY:
+#     openai.api_key = OPENAI_API_KEY
+
+# Configure logging for pdfminer to suppress warnings about CropBox
+logging.getLogger("pdfminer.pdfpage").setLevel(logging.ERROR)
 
 # Initialize Google Gemini if enabled
 if USE_GOOGLE_GEMINI and GOOGLE_GEMINI_API_KEY:
     try:
         import google.generativeai as genai
         genai.configure(api_key=GOOGLE_GEMINI_API_KEY)
-        gemini_model = genai.GenerativeModel('gemini-pro')
+        # Use a different model name that's available in the API
+        # gemini-1.5-pro or gemini-1.0-pro are common model names
+        try:
+            gemini_model = genai.GenerativeModel('gemini-1.5-pro')
+            logger.info("Using default model: gemini-1.5-pro")
+        except Exception as model_error:
+            # If listing fails, try a hardcoded model name
+            logger.warning(f"Could not list models: {model_error}. Trying hardcoded model name.")
+            gemini_model = genai.GenerativeModel('gemini-1.5-pro')
+            logger.info("Using default model: gemini-1.5-pro")
     except ImportError:
         logger.warning("Google Gemini library not available. Falling back to OpenAI.")
         USE_GOOGLE_GEMINI = False
@@ -343,7 +355,8 @@ async def recommend_claim_options_gemini(policies: List[Dict], situation: str) -
         return await recommend_claim_options_openai(policies, situation)
 
     try:
-        policies_json = json.dumps(policies, indent=2)
+        safe_policies = convert_mongo_types(policies)
+        policies_json = json.dumps(safe_policies, indent=2)
         
         prompt = f"""
         Here are the user's insurance policies:
