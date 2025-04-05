@@ -45,6 +45,15 @@ class UserStates(StatesGroup):
     reviewing_claim = State()
     tracking_claim = State()
     filling_claim_form = State()
+    entering_email = State()
+    entering_phone = State()
+    entering_name = State()
+    
+    # Specific claim form states
+    claim_date = State()
+    claim_provider = State()
+    claim_amount = State()
+    claim_description = State()
 
 # Create main menu keyboard
 async def get_main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -61,9 +70,79 @@ async def get_main_menu_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="🔍 Claim Recommendations", callback_data="claim_recommendations"),
             InlineKeyboardButton(text="📋 My Policies", callback_data="my_policies")
+        ],
+        [
+            InlineKeyboardButton(text="👤 My Profile", callback_data="my_profile")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+# Add this function to check if user profile needs completion
+async def check_user_profile(user_id: int) -> Dict[str, bool]:
+    """Check if user profile is complete or needs additional info"""
+    user = await db.get_user(user_id)
+    if not user:
+        return {"profile_complete": False, "needs_email": True, "needs_phone": True, "needs_name": True}
+        
+    # Check if required fields are missing
+    needs_email = not bool(user.get("email"))
+    needs_phone = not bool(user.get("phone"))
+    
+    # Check if full name is missing or only Telegram username is present
+    has_first_name = bool(user.get("first_name"))
+    has_last_name = bool(user.get("last_name"))
+    has_full_name = bool(user.get("full_name"))
+    
+    # If user doesn't have a full name, or has only first name but not last name,
+    # prompt for complete name
+    needs_name = not has_full_name and (not has_first_name or not has_last_name)
+    
+    profile_complete = not (needs_email or needs_phone or needs_name)
+    
+    return {
+        "profile_complete": profile_complete,
+        "needs_email": needs_email,
+        "needs_phone": needs_phone,
+        "needs_name": needs_name
+    }
+
+# Add this function to prompt for missing information
+async def prompt_for_missing_info(message: Union[Message, CallbackQuery], state: FSMContext, user_id: int) -> bool:
+    """Prompts user for missing profile information. Returns True if profile is complete."""
+    profile_status = await check_user_profile(user_id)
+    
+    # If profile is complete, nothing to do
+    if profile_status["profile_complete"]:
+        return True
+    
+    # Handle missing name
+    if profile_status["needs_name"]:
+        if isinstance(message, CallbackQuery):
+            await message.message.answer("Please enter your full name (first and last name):")
+        else:
+            await message.answer("Please enter your full name (first and last name):")
+        await state.set_state(UserStates.entering_name)
+        return False
+        
+    # Handle missing email
+    if profile_status["needs_email"]:
+        if isinstance(message, CallbackQuery):
+            await message.message.answer("Please provide your email address:")
+        else:
+            await message.answer("Please provide your email address:")
+        await state.set_state(UserStates.entering_email)
+        return False
+        
+    # Handle missing phone
+    if profile_status["needs_phone"]:
+        if isinstance(message, CallbackQuery):
+            await message.message.answer("Please provide your phone number for contact purposes:")
+        else:
+            await message.answer("Please provide your phone number for contact purposes:")
+        await state.set_state(UserStates.entering_phone)
+        return False
+        
+    return True
 
 @router.message(CommandStart())
 async def command_start_handler(message: Message, state: FSMContext) -> None:
@@ -82,17 +161,154 @@ async def command_start_handler(message: Message, state: FSMContext) -> None:
     # Create or update user in database
     await db.create_user(user_data)
     
-    await state.set_state(UserStates.main_menu)
-    
+    # Welcome message first
     welcome_text = (
-        f"Hello, {hbold(message.from_user.first_name)}! 👋\n\n"
+        f"Hello, {hbold(message.from_user.first_name or 'there')}! 👋\n\n"
         f"I'm your Insurance Claim Assistant. I can help you understand your insurance policies, "
-        f"recommend claims based on your situation, and assist with filing claims.\n\n"
-        f"What would you like to do today?"
+        f"recommend claims based on your situation, and assist with filing claims."
     )
     
+    await message.answer(welcome_text)
+    
+    # Always ask for complete profile information to ensure we have it for claim forms
     await message.answer(
-        welcome_text,
+        "To provide you with the best service and ensure your claim forms are correctly filled, "
+        "I'd like to collect some basic information.\n\n"
+        "Please enter your full name (first and last name):"
+    )
+    
+    # Start collecting profile information
+    await state.set_state(UserStates.entering_name)
+    # Flag that we're in the initial setup flow
+    await state.update_data(continue_to="initial_setup")
+    
+@router.message(UserStates.entering_name)
+async def handle_name_entry(message: Message, state: FSMContext) -> None:
+    """Process user's name entry"""
+    full_name = message.text.strip()
+    user_data = await state.get_data()
+    continue_to = user_data.get("continue_to")
+    
+    if len(full_name) < 3:
+        await message.answer("Please enter your complete name (first and last name):")
+        return
+    
+    # Try to split into first and last name
+    name_parts = full_name.split(maxsplit=1)
+    user_update = {"full_name": full_name}
+    
+    if len(name_parts) >= 2:
+        user_update["first_name"] = name_parts[0]
+        user_update["last_name"] = name_parts[1]
+    else:
+        user_update["first_name"] = full_name
+    
+    # Update user profile with name
+    user_id = message.from_user.id
+    await db.update_user(user_id, user_update)
+    
+    # Send confirmation
+    await message.answer(f"Thank you, {full_name}!")
+    
+    # Continue with email collection
+    await message.answer("Please provide your email address:")
+    await state.set_state(UserStates.entering_email)
+    return
+    
+@router.message(UserStates.entering_email)
+async def handle_email_entry(message: Message, state: FSMContext) -> None:
+    """Process user's email entry"""
+    email = message.text.strip()
+    user_data = await state.get_data()
+    continue_to = user_data.get("continue_to")
+    
+    # Basic email validation
+    if not "@" in email or not "." in email or len(email) < 5:
+        await message.answer("That doesn't look like a valid email address. Please try again:")
+        return
+    
+    # Update user profile with email
+    user_id = message.from_user.id
+    await db.update_user(user_id, {"email": email})
+    
+    # Send confirmation
+    await message.answer(f"Thank you! Your email ({email}) has been saved.")
+    
+    # Always continue with phone collection in the initial flow
+    if continue_to == "initial_setup":
+        await message.answer("Please provide your phone number for contact purposes:")
+        await state.set_state(UserStates.entering_phone)
+        return
+    
+    # Check if we need additional profile information
+    profile_status = await check_user_profile(user_id)
+    
+    # Continue with name collection if needed
+    if profile_status["needs_name"]:
+        await message.answer("Please enter your full name (first and last name):")
+        await state.set_state(UserStates.entering_name)
+        return
+    
+    # Continue with phone collection if needed
+    if profile_status["needs_phone"]:
+        await message.answer("Please provide your phone number for contact purposes:")
+        await state.set_state(UserStates.entering_phone)
+        return
+    
+    # Check if we're in the middle of a claim flow
+    if continue_to == "claim_provider":
+        # Continue with claim provider
+        await message.answer("Now, what is the name of the healthcare provider or facility?")
+        await state.set_state(UserStates.claim_provider)
+        return
+    
+    # Show main menu if not continuing to a specific state
+    await state.set_state(UserStates.main_menu)
+    await message.answer(
+        "Main Menu - What would you like to do?",
+        reply_markup=await get_main_menu_keyboard()
+    )
+
+@router.message(UserStates.entering_phone)
+async def handle_phone_entry(message: Message, state: FSMContext) -> None:
+    """Process user's phone entry"""
+    phone = message.text.strip()
+    user_data = await state.get_data()
+    continue_to = user_data.get("continue_to")
+    
+    # Basic phone validation - allow digits, +, -, (, ), and spaces
+    cleaned_phone = ''.join(c for c in phone if c.isdigit() or c in '+-() ')
+    if len(cleaned_phone) < 7:  # Minimum reasonable length for a phone number
+        await message.answer("That doesn't look like a valid phone number. Please try again:")
+        return
+    
+    # Update user profile with phone
+    user_id = message.from_user.id
+    await db.update_user(user_id, {"phone": cleaned_phone})
+    
+    # Send confirmation
+    await message.answer(f"Thank you! Your phone number has been saved.")
+    
+    # If this is the initial setup, show the main menu
+    if continue_to == "initial_setup":
+        await state.set_state(UserStates.main_menu)
+        await message.answer(
+            "Thank you for providing your information! What would you like to do next?",
+            reply_markup=await get_main_menu_keyboard()
+        )
+        return
+    
+    # Check if we're in the middle of a claim flow
+    if continue_to == "claim_provider":
+        # Continue with claim provider
+        await message.answer("Now, what is the name of the healthcare provider or facility?")
+        await state.set_state(UserStates.claim_provider)
+        return
+    
+    # Show main menu if not continuing to a specific state
+    await state.set_state(UserStates.main_menu)
+    await message.answer(
+        "Main Menu - What would you like to do?",
         reply_markup=await get_main_menu_keyboard()
     )
 
@@ -351,6 +567,13 @@ async def my_policies_callback(callback_query: CallbackQuery, state: FSMContext)
 async def back_to_menu_callback(callback_query: CallbackQuery, state: FSMContext) -> None:
     """Handle the back to menu button"""
     await callback_query.answer()
+    
+    # Check if we need additional user info
+    profile_complete = await prompt_for_missing_info(callback_query, state, callback_query.from_user.id)
+    
+    if not profile_complete:
+        return
+    
     await state.set_state(UserStates.main_menu)
     await callback_query.message.answer(
         "Main Menu - What would you like to do?",
@@ -804,121 +1027,122 @@ async def claim_type_callback(callback_query: CallbackQuery, state: FSMContext) 
     
     await callback_query.answer()
     
-    # Guide user through form step by step
+    # Guide user through form starting with date
     await callback_query.message.answer(
         f"You're creating a {claim_type} claim. Let's fill out the details step by step.\n\n"
         f"First, what was the date of service? (Please use YYYY-MM-DD format)"
     )
     
-    # Set state to a new sub-state for the form filling process
-    await state.set_state(UserStates.filling_claim_form)
-    # Track which field we're collecting
-    await state.update_data(current_field="service_date")
+    # Set state to claim date collection
+    await state.set_state(UserStates.claim_date)
 
-@router.message(UserStates.filling_claim_form)
-async def handle_claim_form_field(message: Message, state: FSMContext) -> None:
-    """Process each field of the claim form one by one"""
-    user_data = await state.get_data()
-    policy_id = user_data.get("selected_policy_id")
-    claim_type = user_data.get("claim_type")
-    current_field = user_data.get("current_field")
-    
-    if not policy_id or not claim_type or not current_field:
-        await message.answer(
-            "I'm missing some information about your claim. Let's start over.",
-            reply_markup=await get_main_menu_keyboard()
-        )
-        await state.set_state(UserStates.main_menu)
-        return
-    
-    # Process the current field
+@router.message(UserStates.claim_date)
+async def handle_claim_date(message: Message, state: FSMContext) -> None:
+    """Process the claim date entry"""
     try:
-        # Update the state with the current field's value
-        if current_field == "service_date":
-            # Validate date format
-            try:
-                input_date = message.text.strip()
-                datetime.strptime(input_date, "%Y-%m-%d")
-                await state.update_data(service_date=input_date)
-            except ValueError:
-                await message.answer(
-                    "Please provide a valid date in YYYY-MM-DD format (e.g., 2023-05-15):"
-                )
-                return
-                
-            # Move to next field
-            await state.update_data(current_field="provider_name")
-            await message.answer("Great! Now, what is the name of the healthcare provider or facility?")
+        # Validate date format
+        input_date = message.text.strip()
+        datetime.strptime(input_date, "%Y-%m-%d")
+        await state.update_data(service_date=input_date)
+        
+        # Confirm date and check if profile is complete
+        await message.answer(f"Date of service: {input_date}")
+        
+        # Check if we need profile information
+        user_id = message.from_user.id
+        profile_status = await check_user_profile(user_id)
+        
+        if profile_status["needs_email"]:
+            await message.answer("Before we continue, please provide your email address:")
+            await state.set_state(UserStates.entering_email)
+            # Save that we're in claim flow to return to it later
+            await state.update_data(continue_to="claim_provider")
+            return
             
-        elif current_field == "provider_name":
-            provider_name = message.text.strip()
-            if not provider_name:
-                await message.answer("Please provide the name of the provider:")
-                return
-                
-            await state.update_data(provider_name=provider_name)
+        if profile_status["needs_phone"]:
+            await message.answer("Please provide your phone number for contact purposes:")
+            await state.set_state(UserStates.entering_phone)
+            # Save that we're in claim flow to return to it later
+            await state.update_data(continue_to="claim_provider")
+            return
             
-            # Move to next field
-            await state.update_data(current_field="amount")
-            await message.answer(
-                "What is the total amount of the claim? (Just enter the number, e.g., 120.50)"
-            )
-            
-        elif current_field == "amount":
-            try:
-                # Remove any currency symbols and commas
-                amount_text = message.text.strip().replace("$", "").replace(",", "")
-                amount = float(amount_text)
-                await state.update_data(amount=amount)
-            except ValueError:
-                await message.answer(
-                    "Please provide a valid amount (e.g., 120.50):"
-                )
-                return
-                
-            # Move to next field
-            await state.update_data(current_field="description")
-            await message.answer(
-                "Please provide a brief description of the service or treatment:"
-            )
-            
-        elif current_field == "description":
-            description = message.text.strip()
-            if not description:
-                await message.answer("Please provide a description:")
-                return
-                
-            await state.update_data(description=description)
-            
-            # All fields collected, show summary and confirm
-            user_data = await state.get_data()
-            
-            summary = (
-                f"📋 Claim Summary:\n\n"
-                f"Type: {user_data.get('claim_type')}\n"
-                f"Date: {user_data.get('service_date')}\n"
-                f"Provider: {user_data.get('provider_name')}\n"
-                f"Amount: ${user_data.get('amount', 0):.2f}\n"
-                f"Description: {user_data.get('description')}\n\n"
-                f"Is this information correct?"
-            )
-            
-            keyboard = [
-                [InlineKeyboardButton(text="✅ Submit Claim", callback_data="confirm_claim")],
-                [InlineKeyboardButton(text="❌ Cancel", callback_data="back_to_menu")]
-            ]
-            keyboard_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
-            
-            await message.answer(summary, reply_markup=keyboard_markup)
-            
-            # Set state to reviewing claim
-            await state.set_state(UserStates.reviewing_claim)
-    
-    except Exception as e:
-        logger.error(f"Error processing claim field: {e}")
+        # If profile is complete, continue with provider
+        await message.answer("Great! Now, what is the name of the healthcare provider or facility?")
+        await state.set_state(UserStates.claim_provider)
+        
+    except ValueError:
         await message.answer(
-            "I encountered an error while processing your information. Let's try again or go back to the main menu with /menu."
+            "Please provide a valid date in YYYY-MM-DD format (e.g., 2023-05-15):"
         )
+
+@router.message(UserStates.claim_provider)
+async def handle_claim_provider(message: Message, state: FSMContext) -> None:
+    """Process provider name entry"""
+    provider_name = message.text.strip()
+    if not provider_name:
+        await message.answer("Please provide the name of the provider:")
+        return
+        
+    await state.update_data(provider_name=provider_name)
+    
+    # Move to next field
+    await message.answer(
+        "What is the total amount of the claim? (Just enter the number, e.g., 120.50)"
+    )
+    await state.set_state(UserStates.claim_amount)
+
+@router.message(UserStates.claim_amount)
+async def handle_claim_amount(message: Message, state: FSMContext) -> None:
+    """Process claim amount entry"""
+    try:
+        # Remove any currency symbols and commas
+        amount_text = message.text.strip().replace("$", "").replace(",", "")
+        amount = float(amount_text)
+        await state.update_data(amount=amount)
+        
+        # Move to next field
+        await message.answer(
+            "Please provide a brief description of the service or treatment:"
+        )
+        await state.set_state(UserStates.claim_description)
+    except ValueError:
+        await message.answer(
+            "Please provide a valid amount (e.g., 120.50):"
+        )
+
+@router.message(UserStates.claim_description)
+async def handle_claim_description(message: Message, state: FSMContext) -> None:
+    """Process claim description entry"""
+    description = message.text.strip()
+    if not description:
+        await message.answer("Please provide a description:")
+        return
+        
+    await state.update_data(description=description)
+    
+    # All fields collected, show summary and confirm
+    user_data = await state.get_data()
+    
+    summary = (
+        f"📋 Claim Summary:\n\n"
+        f"Type: {user_data.get('claim_type')}\n"
+        f"Date: {user_data.get('service_date')}\n"
+        f"Provider: {user_data.get('provider_name')}\n"
+        f"Amount: ${user_data.get('amount', 0):.2f}\n"
+        f"Description: {user_data.get('description')}\n\n"
+        f"Is this information correct?"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton(text="✅ Submit Claim", callback_data="confirm_claim")],
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="back_to_menu")]
+    ]
+    keyboard_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    
+    await message.answer(summary, reply_markup=keyboard_markup)
+    
+    # Set state to reviewing claim
+    await state.set_state(UserStates.reviewing_claim)
 
 # Add handler for claim confirmation
 @router.callback_query(lambda c: c.data == "confirm_claim")
@@ -1122,6 +1346,77 @@ async def view_claim_callback(callback_query: CallbackQuery, state: FSMContext) 
     keyboard_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
     
     await callback_query.message.answer(details, reply_markup=keyboard_markup)
+
+# Add profile management handler
+@router.callback_query(lambda c: c.data == "my_profile")
+async def my_profile_callback(callback_query: CallbackQuery, state: FSMContext) -> None:
+    """Handle the my profile button"""
+    user_id = callback_query.from_user.id
+    
+    # Get user details
+    user = await db.get_user(user_id)
+    await callback_query.answer()
+    
+    if not user:
+        await callback_query.message.answer(
+            "Error retrieving your profile information. Please try again later.",
+            reply_markup=await get_main_menu_keyboard()
+        )
+        await state.set_state(UserStates.main_menu)
+        return
+    
+    # Display user profile
+    profile_text = "👤 Your Profile Information:\n\n"
+    
+    # Basic information
+    full_name = user.get("full_name", "")
+    if not full_name:
+        first_name = user.get("first_name", "")
+        last_name = user.get("last_name", "")
+        if first_name or last_name:
+            full_name = f"{first_name} {last_name}".strip()
+        else:
+            full_name = user.get("username", "Not set")
+    
+    profile_text += f"Name: {full_name}\n"
+    profile_text += f"Username: @{user.get('username', 'Not set')}\n"
+    profile_text += f"Email: {user.get('email', 'Not set')}\n"
+    profile_text += f"Phone: {user.get('phone', 'Not set')}\n"
+    
+    # Create keyboard for profile management options
+    keyboard = [
+        [InlineKeyboardButton(text="✏️ Update Name", callback_data="update_name")],
+        [InlineKeyboardButton(text="✏️ Update Email", callback_data="update_email")],
+        [InlineKeyboardButton(text="✏️ Update Phone", callback_data="update_phone")],
+        [InlineKeyboardButton(text="← Back to Menu", callback_data="back_to_menu")]
+    ]
+    profile_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    
+    await callback_query.message.answer(profile_text, reply_markup=profile_markup)
+
+# Add update name handler
+@router.callback_query(lambda c: c.data == "update_name")
+async def update_name_callback(callback_query: CallbackQuery, state: FSMContext) -> None:
+    """Handle the update name button"""
+    await callback_query.answer()
+    await callback_query.message.answer("Please enter your full name (first and last name):")
+    await state.set_state(UserStates.entering_name)
+
+# Add update email handler
+@router.callback_query(lambda c: c.data == "update_email")
+async def update_email_callback(callback_query: CallbackQuery, state: FSMContext) -> None:
+    """Handle the update email button"""
+    await callback_query.answer()
+    await callback_query.message.answer("Please enter your new email address:")
+    await state.set_state(UserStates.entering_email)
+
+# Add update phone handler
+@router.callback_query(lambda c: c.data == "update_phone")
+async def update_phone_callback(callback_query: CallbackQuery, state: FSMContext) -> None:
+    """Handle the update phone button"""
+    await callback_query.answer()
+    await callback_query.message.answer("Please enter your new phone number:")
+    await state.set_state(UserStates.entering_phone)
 
 # Run the bot
 async def main() -> None:
