@@ -13,7 +13,7 @@ async def handle_message(update: Update, context):
         intent = nlp_processor.parse_command(user_msg)
         handler = health_handler()
         
-        if intent['action'] == 'swap':
+        if intent['action'] == 'claim':
             tx_data = await handler.execute_swap(intent)
         elif intent['action'] == 'stake':
             tx_data = await handler.execute_stake(intent)
