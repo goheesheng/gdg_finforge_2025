@@ -186,7 +186,7 @@ To obtain your own service account key:
 5. Update the `.env` file to point to this key file
 
 ## Project Structure
-
+```
 .
 ├── app/                      # Main application directory
 │   ├── bot.py               # Main bot logic
@@ -201,3 +201,4 @@ To obtain your own service account key:
 ├── temp_downloads/          # Temporary download storage
 ├── requirements.txt         # Python package dependencies
 └── README.md               # Project documentation
+```
