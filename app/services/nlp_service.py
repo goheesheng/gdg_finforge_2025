@@ -332,7 +332,6 @@ async def recommend_claim_options_openai(policies: List[Dict], situation: str) -
                 {"role": "system", "content": "You are a helpful insurance claims assistant providing accurate recommendations based only on the provided policy details. You MUST return data in JSON format with all required fields."},
                 {"role": "user", "content": prompt}
             ],
-            response_format={"type": "json_object"},
             max_tokens=1500,
             temperature=0.3
         )
