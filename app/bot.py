@@ -524,12 +524,23 @@ async def track_claims_callback(callback_query: CallbackQuery, state: FSMContext
     claim_keyboard = []
     
     for i, claim in enumerate(claims, 1):
+        # Get policy details
         policy = await db.get_policy(claim.get("policy_id"))
-        policy_name = policy.get("provider", "Unknown") if policy else "Unknown"
+        
+        # Get provider information from multiple possible sources
+        provider_name = claim.get('provider_name', '')
+        if not provider_name:
+            provider_name = claim.get('provider', '')
+        if not provider_name and policy:
+            provider_name = policy.get('provider', '')
+            if not provider_name:
+                provider_name = policy.get('company', '')
+            if not provider_name:
+                provider_name = policy.get('policy_provider', '')
         
         claims_text += (
             f"{i}. {claim.get('claim_type', 'Claim')}\n"
-            f"   Provider: {policy_name}\n"
+            f"   Provider: {provider_name if provider_name else 'Unknown'}\n"
             f"   Status: {claim.get('status', 'Unknown')}\n"
             f"   Amount: ${claim.get('amount', 0):.2f}\n"
             f"   Date: {claim.get('created_at').strftime('%Y-%m-%d') if claim.get('created_at') else 'Unknown'}\n\n"
@@ -593,15 +604,45 @@ async def my_policies_callback(callback_query: CallbackQuery, state: FSMContext)
     policy_keyboard = []
     
     for i, policy in enumerate(policies, 1):
+        # Get policy provider and type
+        provider = policy.get('policy_provider', '')  # Try 'policy_provider' field first
+        if not provider:
+            provider = policy.get('company', '')  # Try 'company' field next
+        if not provider:
+            provider = policy.get('provider', '')  # Fall back to 'provider' field
+        policy_type = policy.get('policy_type', 'Policy')
+        
+        # Get policy number from either policy_number or policy_id field
+        policy_number = policy.get('policy_number', '')
+        if not policy_number and 'policy_id' in policy:
+            policy_number = policy['policy_id']
+            
+        # Get coverage areas
+        coverage_areas = []
+        if policy.get('coverage_areas'):
+            if isinstance(policy['coverage_areas'], dict):
+                coverage_areas = list(policy['coverage_areas'].keys())
+            elif isinstance(policy['coverage_areas'], list):
+                # Handle list format for coverage areas
+                for area in policy['coverage_areas']:
+                    if isinstance(area, dict) and 'coverage_type' in area:
+                        coverage_areas.append(area['coverage_type'])
+        
+        # Format the policy display
         policies_text += (
-            f"{i}. {policy.get('provider', 'Unknown')} - {policy.get('policy_type', 'Policy')}\n"
-            f"   Policy Number: {policy.get('policy_number', 'Unknown')}\n"
-            f"   Coverage: {', '.join(policy.get('coverage_areas', {}).keys()) if policy.get('coverage_areas') else 'Unknown'}\n\n"
+            f"{i}. {provider if provider else 'Unknown'} - {policy_type}\n"
+            f"   Policy Number: {policy_number if policy_number else 'Unknown'}\n"
+            f"   Coverage: {', '.join(coverage_areas) if coverage_areas else 'Unknown'}\n\n"
         )
         
+        # Create button text
+        button_text = f"{provider if provider else 'Unknown'} - {policy_type}"
+        if policy_number:
+            button_text += f" ({policy_number})"
+            
         policy_keyboard.append([
             InlineKeyboardButton(
-                text=f"{policy.get('provider', 'Unknown')} - {policy.get('policy_type', 'Policy')}", 
+                text=button_text, 
                 callback_data=f"view_policy_{str(policy['_id'])}"
             )
         ])
@@ -699,6 +740,26 @@ async def handle_policy_upload(message: Message, state: FSMContext) -> None:
             await bot.delete_message(chat_id=message.chat.id, message_id=processing_message.message_id)
             return
         
+        # Convert coverage_areas from list to dictionary if needed
+        if "coverage_areas" in policy_details and isinstance(policy_details["coverage_areas"], list):
+            coverage_areas = {}
+            for coverage in policy_details["coverage_areas"]:
+                # Handle different possible keys for coverage type
+                coverage_type = coverage.get('type', coverage.get('coverage_type', '')).lower().replace(' ', '_')
+                if not coverage_type:
+                    continue
+                    
+                # Handle different possible formats for limit
+                limit = coverage.get('limit', 0)
+                if isinstance(limit, str):
+                    limit = float(limit.replace('$', '').replace(',', ''))
+                    
+                coverage_areas[coverage_type] = {
+                    'limit': limit,
+                    'description': coverage.get('description', '')
+                }
+            policy_details["coverage_areas"] = coverage_areas
+        
         # Store the extracted policy details in the database
         policy_data = {
             "file_name": file_name,
@@ -734,7 +795,7 @@ async def handle_policy_upload(message: Message, state: FSMContext) -> None:
         
         if "coverage_areas" in policy_details and policy_details["coverage_areas"]:
             summary += "\n✅ Key Coverage Areas:\n"
-            for area, details in policy_data.get("coverage_areas", {}).items():
+            for area, details in policy_details["coverage_areas"].items():
                 if isinstance(details, dict):
                     limit = details.get("limit", "Not specified")
                 else:
@@ -933,7 +994,7 @@ async def handle_situation_description(message: Message, state: FSMContext) -> N
                 else:
                     # Log the missing policy
                     logger.warning(f"Policy not found for ID: {policy_id}, available IDs: {list(policy_map.keys())}")
-                    response += f"• Policy ID: {policy_id} (Details not found)\n"
+                    response += f"• Policy ID: {policy_id} \n"
         else:
             response += "• No specific policies identified\n"
         
@@ -980,7 +1041,7 @@ async def handle_situation_description(message: Message, state: FSMContext) -> N
                     response += f"{i}. {policy_name}\n"
                 else:
                     logger.warning(f"Policy not found for filing order with ID: {policy_id}")
-                    response += f"{i}. Policy ID: {policy_id} (Details not found)\n"
+                    response += f"{i}. Policy ID: {policy_id} \n"
         else:
             response += "• No specific filing order recommended\n"
         
@@ -1033,6 +1094,10 @@ def get_descriptive_policy_name(policy: Dict) -> str:
     policy_type = policy.get("policy_type", "")
     policy_number = policy.get("policy_number", "")
     
+    # If policy_number is empty, try to get it from policy_id
+    if not policy_number and "policy_id" in policy:
+        policy_number = policy["policy_id"]
+    
     if provider and policy_type:
         policy_name = f"{provider} - {policy_type}"
     elif provider:
@@ -1045,14 +1110,26 @@ def get_descriptive_policy_name(policy: Dict) -> str:
         # If no identifying information, use part of the ID
         policy_id = str(policy['_id'])
         policy_name = f"Policy {policy_id[-6:]}"
+    
+    # Add policy number if available
+    if policy_number and policy_number not in policy_name:
+        policy_name += f" ({policy_number})"
         
     # Add coverage areas if available
+    coverage_areas = []
     if policy.get("coverage_areas"):
-        areas = list(policy.get("coverage_areas", {}).keys())
-        if areas:
-            policy_name += f" ({', '.join(areas[:2])})"
-            if len(areas) > 2:
-                policy_name += "..."
+        if isinstance(policy["coverage_areas"], dict):
+            coverage_areas = list(policy["coverage_areas"].keys())
+        elif isinstance(policy["coverage_areas"], list):
+            # Handle list format for coverage areas
+            for area in policy["coverage_areas"]:
+                if isinstance(area, dict) and "coverage_type" in area:
+                    coverage_areas.append(area["coverage_type"])
+    
+    if coverage_areas:
+        policy_name += f" ({', '.join(coverage_areas[:2])})"
+        if len(coverage_areas) > 2:
+            policy_name += "..."
                 
     return policy_name
 
@@ -1319,11 +1396,20 @@ async def view_policy_callback(callback_query: CallbackQuery, state: FSMContext)
         await state.set_state(UserStates.main_menu)
         return
     
-    # Format the policy details
-    details = f"📋 Policy Details: {policy.get('provider', 'Unknown')}\n\n"
+    # Get policy provider and type
+    provider = policy.get('provider', '')
+    policy_type = policy.get('policy_type', 'Policy')
     
-    if "policy_number" in policy:
-        details += f"Policy Number: {policy['policy_number']}\n"
+    # Get policy number from either policy_number or policy_id field
+    policy_number = policy.get('policy_number', '')
+    if not policy_number and 'policy_id' in policy:
+        policy_number = policy['policy_id']
+    
+    # Format the policy details
+    details = f"📋 Policy Details: {provider if provider else 'Unknown'} - {policy_type}\n\n"
+    
+    if policy_number:
+        details += f"Policy Number: {policy_number}\n"
     
     if "policy_holder" in policy:
         details += f"Policy Holder: {policy['policy_holder']}\n"
@@ -1339,15 +1425,31 @@ async def view_policy_callback(callback_query: CallbackQuery, state: FSMContext)
     
     if "deductibles" in policy:
         details += f"\nDeductibles: {policy['deductibles']}\n"
+    elif "deductible" in policy:
+        details += f"\nDeductible: {policy['deductible']}\n"
     
     if "out_of_pocket_max" in policy:
         details += f"Out-of-Pocket Maximum: {policy['out_of_pocket_max']}\n"
+    elif "out_of_pocket_maximum" in policy:
+        details += f"Out-of-Pocket Maximum: {policy['out_of_pocket_maximum']}\n"
     
     if "coverage_areas" in policy and policy["coverage_areas"]:
         details += "\n✅ Coverage Areas:\n"
-        for area, details_info in policy["coverage_areas"].items():
-            limit = details_info.get("limit", "Not specified")
-            details += f"- {area}: {limit}\n"
+        
+        # Handle both dictionary and list formats for coverage areas
+        if isinstance(policy["coverage_areas"], dict):
+            for area, details_info in policy["coverage_areas"].items():
+                if isinstance(details_info, dict):
+                    limit = details_info.get("limit", "Not specified")
+                else:
+                    limit = details_info
+                details += f"- {area}: {limit}\n"
+        elif isinstance(policy["coverage_areas"], list):
+            for area in policy["coverage_areas"]:
+                if isinstance(area, dict):
+                    coverage_type = area.get("coverage_type", "Unknown")
+                    limit = area.get("limit", "Not specified")
+                    details += f"- {coverage_type}: {limit}\n"
     
     if "exclusions" in policy and policy["exclusions"]:
         details += "\n❌ Exclusions:\n"
@@ -1393,12 +1495,24 @@ async def view_claim_callback(callback_query: CallbackQuery, state: FSMContext) 
     
     # Get policy details
     policy = await db.get_policy(claim.get("policy_id"))
-    policy_name = policy.get("provider", "Unknown") if policy else "Unknown"
+    
+    # Get provider information from multiple possible sources
+    provider_name = claim.get('provider_name', '')
+    if not provider_name:
+        provider_name = claim.get('provider', '')
+    if not provider_name and policy:
+        provider_name = policy.get('provider', '')
+        if not provider_name:
+            provider_name = policy.get('company', '')
+        if not provider_name:
+            provider_name = policy.get('policy_provider', '')
+    
+    policy_name = provider_name if provider_name else "Unknown"
     
     # Format the claim details
     details = f"📝 Claim Details\n\n"
     details += f"Type: {claim.get('claim_type', 'Unknown')}\n"
-    details += f"Provider: {claim.get('provider_name', 'Unknown')}\n"
+    details += f"Provider: {provider_name if provider_name else 'Unknown'}\n"
     details += f"Policy: {policy_name}\n"
     details += f"Service Date: {claim.get('service_date', 'Unknown')}\n"
     details += f"Amount: ${claim.get('amount', 0):.2f}\n"

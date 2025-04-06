@@ -219,87 +219,249 @@ async def analyze_optimal_claim_path(user_id: int, situation: str) -> Dict:
         }
     
     logger.info(f"Found {len(policies)} policies for user {user_id}")
-    logger.info(f"Policy IDs: {[str(p['_id']) for p in policies]}")
+    
+    # Create a map of policy details for easier reference
+    policy_map = {}
+    policy_number_map = {}  # Map policy numbers to policy IDs
+    policy_id_to_number = {}  # Map policy IDs to policy numbers
+    
+    for policy in policies:
+        policy_id = str(policy["_id"])
+        policy_number = policy.get("policy_number", "") or policy.get("policy_id", "")
+        
+        policy_map[policy_id] = {
+            "id": policy_id,
+            "provider": policy.get("provider", ""),
+            "policy_type": policy.get("policy_type", ""),
+            "policy_number": policy_number,
+            "coverage_areas": policy.get("coverage_areas", {}),
+            "deductible": policy.get("deductible", ""),
+            "copayment": policy.get("copayment", ""),
+            "out_of_pocket_max": policy.get("out_of_pocket_max", "")
+        }
+        
+        # Map by policy number if available
+        if policy_number:
+            policy_number_map[policy_number] = policy_id
+            policy_id_to_number[policy_id] = policy_number
+    
+    logger.info(f"Policy number map: {policy_number_map}")
     
     # Use NLP service to analyze policies and recommend claim options
     recommendations = await recommend_claim_options(policies, situation)
     
     logger.info(f"Raw recommendations: {recommendations}")
     
-    # Create a list of actual policy IDs as strings
-    actual_policy_ids = [str(p["_id"]) for p in policies]
+    # Create a mapping of policy types to actual policy IDs
+    policy_type_map = {}
+    for policy_id, policy in policy_map.items():
+        policy_type = policy["policy_type"].lower()
+        if "health" in policy_type:
+            policy_type_map["health"] = policy_id
+        elif "auto" in policy_type:
+            policy_type_map["auto"] = policy_id
+        elif "home" in policy_type:
+            policy_type_map["home"] = policy_id
     
-    # FIX: Check if returned policies exist - if not, replace them with actual ones
+    # Extract policy numbers from the explanation if available
+    policy_numbers = {}
+    if recommendations.get("explanation"):
+        import re
+        # Look for patterns like "policy 123456" or "policy number 123456"
+        policy_matches = re.findall(r'policy\s+(?:number\s+)?(\d{6})', recommendations["explanation"], re.IGNORECASE)
+        for match in policy_matches:
+            # Find the policy with this number
+            if match in policy_number_map:
+                policy_numbers[match] = policy_number_map[match]
+    
+    logger.info(f"Extracted policy numbers: {policy_numbers}")
+    
+    # Update applicable policies to use actual policy IDs
     if recommendations.get("applicable_policies"):
-        # Check if any of the applicable_policies don't exist in our database
-        for i, policy_id in enumerate(recommendations["applicable_policies"]):
-            if policy_id not in actual_policy_ids:
-                logger.warning(f"Replacing fictional policy ID {policy_id} with a real one")
-                # Replace with the first actual policy ID
-                if actual_policy_ids:
-                    recommendations["applicable_policies"][i] = actual_policy_ids[0]
-        
-        # If we still have no valid policies, use all available policies
-        if not recommendations["applicable_policies"] or all(pid not in actual_policy_ids for pid in recommendations["applicable_policies"]):
-            recommendations["applicable_policies"] = actual_policy_ids
-    else:
-        # Default to all policies if none provided
-        recommendations["applicable_policies"] = actual_policy_ids
-    
-    # FIX: Update coverage details to use actual policy IDs
-    if recommendations.get("coverage_details"):
-        fixed_coverage_details = []
-        for detail in recommendations["coverage_details"]:
-            if detail.get("policy_id") not in actual_policy_ids:
-                # Get the first applicable policy ID or first actual policy ID
-                replacement_id = (
-                    recommendations["applicable_policies"][0] 
-                    if recommendations.get("applicable_policies") 
-                    else actual_policy_ids[0]
-                )
-                detail["policy_id"] = replacement_id
-            fixed_coverage_details.append(detail)
-        recommendations["coverage_details"] = fixed_coverage_details
-    else:
-        # Create default coverage details for each applicable policy
-        recommendations["coverage_details"] = []
+        actual_policies = []
         for policy_id in recommendations["applicable_policies"]:
-            # Extract coverage and deductible info from explanation if possible
-            explanation = recommendations.get("explanation", "").lower()
-            
-            # Try to find dollar amounts in the explanation
-            import re
-            amount_matches = re.findall(r'\$?(\d+[,\d]*)', explanation)
-            estimated_coverage = None
-            deductible = None
-            
-            if amount_matches:
-                for match in amount_matches:
-                    amount = match.replace(',', '')
-                    if "deductible" in explanation.lower() and not deductible:
-                        deductible = f"${amount}"
-                    elif estimated_coverage is None:
-                        estimated_coverage = f"${amount}"
-            
-            recommendations["coverage_details"].append({
-                "policy_id": policy_id,
-                "estimated_coverage": estimated_coverage or "See policy for details",
-                "deductible": deductible or "See policy for details",
-                "copay": "See policy for details"
-            })
+            # If it's a known policy ID, use it directly
+            if policy_id in policy_map:
+                actual_policies.append(policy_id)
+            # If it's a policy number, look it up
+            elif policy_id in policy_number_map:
+                actual_policies.append(policy_number_map[policy_id])
+            else:
+                # Try to map based on policy type mentioned in the recommendation
+                policy_type = policy_id.lower()
+                if "health" in policy_type and "health" in policy_type_map:
+                    actual_policies.append(policy_type_map["health"])
+                elif "auto" in policy_type and "auto" in policy_type_map:
+                    actual_policies.append(policy_type_map["auto"])
+                elif "home" in policy_type and "home" in policy_type_map:
+                    actual_policies.append(policy_type_map["home"])
+        recommendations["applicable_policies"] = list(set(actual_policies))  # Remove duplicates
     
-    # FIX: Update filing order to use actual policy IDs
-    if not recommendations.get("filing_order") or not all(pid in actual_policy_ids for pid in recommendations["filing_order"]):
-        # Use applicable_policies as filing order
+    # If no applicable policies were found, try to extract from the explanation
+    if not recommendations.get("applicable_policies") and policy_numbers:
+        recommendations["applicable_policies"] = list(policy_numbers.values())
+    
+    logger.info(f"Applicable policies after mapping: {recommendations.get('applicable_policies', [])}")
+    
+    # Update coverage details to use actual policy IDs
+    if recommendations.get("coverage_details"):
+        actual_coverage_details = []
+        for detail in recommendations["coverage_details"]:
+            policy_id = detail.get("policy_id", "")
+            if policy_id in policy_map:
+                # Use the actual policy details
+                policy = policy_map[policy_id]
+                detail["policy_id"] = policy_id
+                if "estimated_coverage" not in detail:
+                    # Try to get coverage from policy details
+                    coverage_areas = policy["coverage_areas"]
+                    if coverage_areas:
+                        total_coverage = sum(
+                            float(str(area.get("limit", "0")).replace("$", "").replace(",", ""))
+                            for area in coverage_areas.values()
+                            if isinstance(area, dict) and "limit" in area
+                        )
+                        detail["estimated_coverage"] = f"${total_coverage:,.2f}"
+                if "deductible" not in detail and policy["deductible"]:
+                    detail["deductible"] = policy["deductible"]
+                if "copay" not in detail and policy["copayment"]:
+                    detail["copay"] = policy["copayment"]
+            # If it's a policy number, look it up
+            elif policy_id in policy_number_map:
+                actual_id = policy_number_map[policy_id]
+                policy = policy_map[actual_id]
+                detail["policy_id"] = actual_id
+                if "estimated_coverage" not in detail:
+                    # Try to get coverage from policy details
+                    coverage_areas = policy["coverage_areas"]
+                    if coverage_areas:
+                        total_coverage = sum(
+                            float(str(area.get("limit", "0")).replace("$", "").replace(",", ""))
+                            for area in coverage_areas.values()
+                            if isinstance(area, dict) and "limit" in area
+                        )
+                        detail["estimated_coverage"] = f"${total_coverage:,.2f}"
+                if "deductible" not in detail and policy["deductible"]:
+                    detail["deductible"] = policy["deductible"]
+                if "copay" not in detail and policy["copayment"]:
+                    detail["copay"] = policy["copayment"]
+                actual_coverage_details.append(detail)
+            else:
+                # Try to map based on policy type
+                policy_type = policy_id.lower()
+                if "health" in policy_type and "health" in policy_type_map:
+                    actual_id = policy_type_map["health"]
+                    detail["policy_id"] = actual_id
+                    actual_coverage_details.append(detail)
+                elif "auto" in policy_type and "auto" in policy_type_map:
+                    actual_id = policy_type_map["auto"]
+                    detail["policy_id"] = actual_id
+                    actual_coverage_details.append(detail)
+                elif "home" in policy_type and "home" in policy_type_map:
+                    actual_id = policy_type_map["home"]
+                    detail["policy_id"] = actual_id
+                    actual_coverage_details.append(detail)
+        recommendations["coverage_details"] = actual_coverage_details
+    
+    # If no coverage details were found, create them from the applicable policies
+    if not recommendations.get("coverage_details") and recommendations.get("applicable_policies"):
+        for policy_id in recommendations["applicable_policies"]:
+            if policy_id in policy_map:
+                policy = policy_map[policy_id]
+                coverage_detail = {
+                    "policy_id": policy_id,
+                    "estimated_coverage": "See policy for details",
+                    "deductible": policy["deductible"] or "See policy for details",
+                    "copay": policy["copayment"] or "See policy for details"
+                }
+                
+                # Try to calculate total coverage
+                coverage_areas = policy["coverage_areas"]
+                if coverage_areas:
+                    total_coverage = sum(
+                        float(str(area.get("limit", "0")).replace("$", "").replace(",", ""))
+                        for area in coverage_areas.values()
+                        if isinstance(area, dict) and "limit" in area
+                    )
+                    if total_coverage > 0:
+                        coverage_detail["estimated_coverage"] = f"${total_coverage:,.2f}"
+                
+                if not recommendations.get("coverage_details"):
+                    recommendations["coverage_details"] = []
+                recommendations["coverage_details"].append(coverage_detail)
+    
+    # Update filing order to use actual policy IDs
+    if recommendations.get("filing_order"):
+        actual_filing_order = []
+        for policy_id in recommendations["filing_order"]:
+            if policy_id in policy_map:
+                actual_filing_order.append(policy_id)
+            # If it's a policy number, look it up
+            elif policy_id in policy_number_map:
+                actual_filing_order.append(policy_number_map[policy_id])
+            else:
+                # Try to map based on policy type
+                policy_type = policy_id.lower()
+                if "health" in policy_type and "health" in policy_type_map:
+                    actual_filing_order.append(policy_type_map["health"])
+                elif "auto" in policy_type and "auto" in policy_type_map:
+                    actual_filing_order.append(policy_type_map["auto"])
+                elif "home" in policy_type and "home" in policy_type_map:
+                    actual_filing_order.append(policy_type_map["home"])
+        recommendations["filing_order"] = list(dict.fromkeys(actual_filing_order))  # Remove duplicates while preserving order
+    
+    # If no filing order was found, use the applicable policies
+    if not recommendations.get("filing_order") and recommendations.get("applicable_policies"):
         recommendations["filing_order"] = recommendations["applicable_policies"].copy()
     
     # Ensure limitations exist
     if not recommendations.get("limitations"):
         recommendations["limitations"] = ["See policy for specific limitations and exclusions."]
     
-    logger.info(f"Final applicable_policies: {recommendations.get('applicable_policies', [])}")
-    logger.info(f"Final coverage_details: {recommendations.get('coverage_details', [])}")
-    logger.info(f"Final filing_order: {recommendations.get('filing_order', [])}")
+    # Update the explanation to ensure it uses the correct policy IDs
+    if recommendations.get("explanation") and recommendations.get("applicable_policies"):
+        explanation = recommendations["explanation"]
+        for policy_id in recommendations["applicable_policies"]:
+            if policy_id in policy_map:
+                policy = policy_map[policy_id]
+                policy_number = policy["policy_number"]
+                policy_type = policy["policy_type"]
+                
+                # Replace generic references with specific policy numbers
+                explanation = explanation.replace(f"{policy_type} insurance policy", f"{policy_type} insurance policy {policy_number}")
+                explanation = explanation.replace(f"policy {policy_id}", f"policy {policy_number}")
+        
+        recommendations["explanation"] = explanation
+    
+    # Add policy numbers to the response for display
+    recommendations["policy_numbers"] = {}
+    for policy_id in recommendations.get("applicable_policies", []):
+        if policy_id in policy_id_to_number:
+            recommendations["policy_numbers"][policy_id] = policy_id_to_number[policy_id]
+    
+    # Update the structured sections to use policy numbers
+    if recommendations.get("applicable_policies"):
+        recommendations["applicable_policies"] = [
+            f"Policy {policy_id_to_number.get(policy_id, policy_id)} ({', '.join(policy_map[policy_id]['coverage_areas'].keys())})..."
+            for policy_id in recommendations["applicable_policies"]
+            if policy_id in policy_map
+        ]
+    
+    if recommendations.get("coverage_details"):
+        for detail in recommendations["coverage_details"]:
+            policy_id = detail.get("policy_id", "")
+            if policy_id in policy_map:
+                policy = policy_map[policy_id]
+                detail["policy_id"] = f"Policy {policy_id_to_number.get(policy_id, policy_id)} ({', '.join(policy['coverage_areas'].keys())})..."
+    
+    if recommendations.get("filing_order"):
+        recommendations["filing_order"] = [
+            f"Policy {policy_id_to_number.get(policy_id, policy_id)} ({', '.join(policy_map[policy_id]['coverage_areas'].keys())})..."
+            for policy_id in recommendations["filing_order"]
+            if policy_id in policy_map
+        ]
+    
+    logger.info(f"Final recommendations: {recommendations}")
     
     return {
         "success": True,
