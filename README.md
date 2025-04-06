@@ -187,4 +187,17 @@ To obtain your own service account key:
 
 ## Project Structure
 
-- `
+.
+├── app/                      # Main application directory
+│   ├── bot.py               # Main bot logic
+│   ├── services/            # Service layer
+│   ├── utils/               # Utility functions
+│   ├── database/            # Database related code
+│   ├── config/              # Configuration files
+│   ├── controllers/         # Controllers
+│   └── .env                 # Environment variables
+│
+├── generated_forms/         # Directory for generated forms
+├── temp_downloads/          # Temporary download storage
+├── requirements.txt         # Python package dependencies
+└── README.md               # Project documentation
