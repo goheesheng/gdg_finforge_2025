@@ -1,5 +1,16 @@
 # Insurance Claim Assistant Bot
 
+#### Reflection
+This is our first ever physical hackathon at Nanyang Technological University, there were 50 teams and we made it to the top 6,! Looking back, I think one of the key reasons was that we focused our POC on health insurance. We should’ve highlighted to the judges that our bot isn’t limited to just health—it can easily be applied to other types like financial and general insurance as well.
+
+We learned a lot throughout the hackathon. Interestingly, we initially started by building a crypto bot for cross-border transfers. After several hours of development, we realized it didn’t align closely with our sponsor, Singlife, and was advised who’s more focused on financial insurance. That led us to pivot and create this Insurance Bot instead.
+
+We’ve since upgraded the bot and added new features! The demo video doesn’t show everything yet, but feel free to check out the GitHub repo and try it out.
+
+🔹 Demo Video: https://youtu.be/OTEfyOIROHo
+🔹 Physical Pitch Video: https://youtu.be/yi-GO5rMQU4
+🔹 GitHub Repo: https://github.com/goheesheng/gdg_finforge_2025 
+
 A smart Telegram bot that helps users understand and file insurance claims.
 #### ** We pivoted from leveraging AI to onboard beginner users on crypto products, we destoryed the old branch main. this is the pivoted idea.
 ## Features
