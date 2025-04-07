@@ -8,10 +8,12 @@ We learned a lot throughout the hackathon. Interestingly, we initially started b
 We’ve since upgraded the bot and added new features! The demo video doesn’t show everything yet, but feel free to check out the GitHub repo and try it out.
 
 🔹 Demo Video: https://youtu.be/OTEfyOIROHo
+
 🔹 Physical Pitch Video: https://youtu.be/yi-GO5rMQU4
+
 🔹 GitHub Repo: https://github.com/goheesheng/gdg_finforge_2025 
 
-A smart Telegram bot that helps users understand and file insurance claims.
+**TLDR* A smart Telegram bot that helps users understand and file insurance claims.**
 #### ** We pivoted from leveraging AI to onboard beginner users on crypto products, we destoryed the old branch main. this is the pivoted idea.
 ## Features
 
